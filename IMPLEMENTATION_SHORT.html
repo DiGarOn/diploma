@@ -1,0 +1,698 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>МиниГОСТ - Реализация</title>
+    <style>
+        @page {
+            size: A4;
+            margin: 2cm;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+            line-height: 1.6;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 20px;
+            color: #333;
+        }
+        
+        h1 {
+            color: #2c3e50;
+            border-bottom: 3px solid #3498db;
+            padding-bottom: 10px;
+            margin-top: 30px;
+            font-size: 2em;
+        }
+        
+        h2 {
+            color: #34495e;
+            border-bottom: 2px solid #bdc3c7;
+            padding-bottom: 8px;
+            margin-top: 25px;
+            font-size: 1.5em;
+        }
+        
+        h3 {
+            color: #7f8c8d;
+            margin-top: 20px;
+            font-size: 1.3em;
+        }
+        
+        h4 {
+            color: #95a5a6;
+            margin-top: 15px;
+            font-size: 1.1em;
+        }
+        
+        code {
+            background-color: #f4f4f4;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: "SF Mono", Monaco, Consolas, "Courier New", monospace;
+            font-size: 0.9em;
+            color: #e74c3c;
+        }
+        
+        pre {
+            background-color: #f6f8fa;
+            border: 1px solid #d1d5da;
+            border-radius: 6px;
+            padding: 16px;
+            overflow-x: auto;
+            margin: 15px 0;
+        }
+        
+        pre code {
+            background-color: transparent;
+            padding: 0;
+            color: #24292e;
+            font-size: 0.85em;
+        }
+        
+        p {
+            margin: 10px 0;
+        }
+        
+        strong {
+            color: #2c3e50;
+            font-weight: 600;
+        }
+        
+        br {
+            display: block;
+            margin: 5px 0;
+            content: "";
+        }
+        
+        /* Для печати */
+        @media print {
+            body {
+                max-width: 100%;
+            }
+            
+            h1, h2, h3 {
+                page-break-after: avoid;
+            }
+            
+            pre, code {
+                page-break-inside: avoid;
+            }
+        }
+    </style>
+</head>
+<body>
+    <h1>Короткая документация по реализации</h1>
+<br>
+<p>Ниже описано только то, что подтверждается текущим кодом проекта.</p>
+<br>
+<p>Основные источники:</p>
+<p>- <code>src/minigost.c</code></p>
+<p>- <code>include/minigost.h</code></p>
+<p>- <code>tools/prep_phase.py</code></p>
+<p>- <code>tools/generate_lookup_table.py</code></p>
+<p>- <code>tools/compute_delta_pi.c</code></p>
+<p>- <code>Makefile</code></p>
+<br>
+<h2>1. Алгоритм МиниГОСТ</h2>
+<br>
+<h3>1.1. Формат данных</h3>
+<br>
+<p>По текущему коду:</p>
+<p>- блок: <code>16</code> бит;</p>
+<p>- полублок: <code>8</code> бит;</p>
+<p>- ключ: <code>32</code> бита;</p>
+<p>- ключ передаётся как <code>const uint8_t key[4]</code>;</p>
+<p>- число раундов: <code>12</code>.</p>
+<br>
+<p>Публичный API:</p>
+<br>
+<pre><code class="language-c">
+uint16_t minigost_encrypt_block(uint16_t plaintext, const uint8_t key[4]);
+uint16_t minigost_decrypt_block(uint16_t ciphertext, const uint8_t key[4]);
+int minigost_encrypt_ecb(const uint8_t *plaintext, uint8_t *ciphertext, size_t length, const uint8_t key[4]);
+int minigost_decrypt_ecb(const uint8_t *ciphertext, uint8_t *plaintext, size_t length, const uint8_t key[4]);
+</code></pre>
+<br>
+<h3>1.2. Интерпретация ключа</h3>
+<br>
+<p>Ключ понимается так:</p>
+<br>
+<pre><code class="language-text">
+K = (K^(4), K^(3), K^(2), K^(1))
+</code></pre>
+<br>
+<p>где:</p>
+<p>- <code>K^(4)</code> — старший байт;</p>
+<p>- <code>K^(1)</code> — младший байт.</p>
+<br>
+<p>Соответствие массиву <code>key[4]</code>:</p>
+<br>
+<pre><code class="language-text">
+key[0] = K^(4)
+key[1] = K^(3)
+key[2] = K^(2)
+key[3] = K^(1)
+</code></pre>
+<br>
+<p>Пример:</p>
+<br>
+<pre><code class="language-c">
+uint8_t key[4] = {0xA1, 0xB2, 0xC3, 0xD4};
+</code></pre>
+<br>
+<p>означает:</p>
+<br>
+<pre><code class="language-text">
+K^(4) = 0xA1
+K^(3) = 0xB2
+K^(2) = 0xC3
+K^(1) = 0xD4
+</code></pre>
+<br>
+<h3>1.3. Как ключ используется в раундах</h3>
+<br>
+<p>В коде зашито расписание:</p>
+<br>
+<pre><code class="language-c">
+static const uint8_t schedule[12] = {3, 2, 1, 0, 3, 2, 1, 0, 0, 1, 2, 3};
+</code></pre>
+<br>
+<p>Это даёт порядок раундовых ключей:</p>
+<br>
+<pre><code class="language-text">
+K^(1), K^(2), K^(3), K^(4),
+K^(1), K^(2), K^(3), K^(4),
+K^(4), K^(3), K^(2), K^(1)
+</code></pre>
+<br>
+<p>То есть по раундам:</p>
+<br>
+<pre><code class="language-text">
+r1  = K^(1)
+r2  = K^(2)
+r3  = K^(3)
+r4  = K^(4)
+r5  = K^(1)
+r6  = K^(2)
+r7  = K^(3)
+r8  = K^(4)
+r9  = K^(4)
+r10 = K^(3)
+r11 = K^(2)
+r12 = K^(1)
+</code></pre>
+<br>
+<h3>1.4. Подготовительная функция</h3>
+<br>
+<p>В <code>src/minigost.c</code> нет вычисления <code>prep_phase</code> на лету. Вместо этого используется таблица:</p>
+<br>
+<pre><code class="language-c">
+static const uint8_t PREP_PHASE_TABLE[256] = { ... };
+</code></pre>
+<br>
+<p>Раундовая функция:</p>
+<br>
+<pre><code class="language-c">
+static inline uint8_t round_function(uint8_t n1, uint8_t k) {
+    uint8_t sum = (n1 + k) &amp; 0xFF;
+    return PREP_PHASE_TABLE[sum];
+}
+</code></pre>
+<br>
+<p>То есть:</p>
+<br>
+<pre><code class="language-text">
+F(x, k) = PREP_PHASE_TABLE[(x + k) mod 256]
+</code></pre>
+<br>
+<h3>1.5. Как сгенерирован PREP_PHASE_TABLE</h3>
+<br>
+<p>Генератор: <code>tools/prep_phase.py</code>.</p>
+<br>
+<p>В нём заданы две 4-битные подстановки:</p>
+<br>
+<pre><code class="language-python">
+p1 = [12, 4, 6, 2, 10, 5, 11, 9, 14, 8, 13, 7, 0, 3, 15, 1]
+p0 = [6, 8, 2, 3, 9, 10, 5, 12, 1, 14, 4, 7, 11, 13, 0, 15]
+</code></pre>
+<br>
+<p>Для каждого байта <code>byte</code> от <code>0</code> до <code>255</code> делается:</p>
+<br>
+<pre><code class="language-python">
+high_nibble = (byte &gt;&gt; 4) &amp; 0xF
+low_nibble = byte &amp; 0xF
+
+high_sub = p1[high_nibble]
+low_sub = p0[low_nibble]
+
+substituted = (high_sub &lt;&lt; 4) | low_sub
+result = ((substituted &lt;&lt; 5) | (substituted &gt;&gt; 3)) &amp; 0xFF
+</code></pre>
+<br>
+<p>То есть:</p>
+<br>
+<pre><code class="language-text">
+h = старшие 4 бита byte
+l = младшие 4 бита byte
+
+s(byte) = (p1[h] &lt;&lt; 4) | p0[l]
+T[byte] = ROTL8(s(byte), 5)
+</code></pre>
+<br>
+<p>Где:</p>
+<br>
+<pre><code class="language-text">
+ROTL8(x, 5) = ((x &lt;&lt; 5) | (x &gt;&gt; 3)) &amp; 0xFF
+</code></pre>
+<br>
+<p>После этого генератор просто печатает все 256 значений подряд в C-массив.</p>
+<br>
+<p>Пример из кода:</p>
+<br>
+<pre><code class="language-text">
+byte = 0x93 = 10010011b
+h = 9
+l = 3
+p1[9] = 8
+p0[3] = 3
+substituted = 0x83
+result = ROTL8(0x83, 5) = 0x70
+</code></pre>
+<br>
+<p>То же значение проверяется встроенным тестом в <code>src/minigost.c</code>.</p>
+<br>
+<h3>1.6. Один раунд шифрования</h3>
+<br>
+<p>Блок делится на два байта:</p>
+<br>
+<pre><code class="language-text">
+L = старший байт
+R = младший байт
+</code></pre>
+<br>
+<p>Код раунда:</p>
+<br>
+<pre><code class="language-c">
+uint8_t n1 = (*block &gt;&gt; 8) &amp; 0xFF;
+uint8_t n2 = *block &amp; 0xFF;
+uint8_t g = round_function(n2, key_element);
+uint8_t new_n2 = n1 ^ g;
+*block = ((uint16_t)n2 &lt;&lt; 8) | new_n2;
+</code></pre>
+<br>
+<p>Это соответствует преобразованию:</p>
+<br>
+<pre><code class="language-text">
+(L, R) -&gt; (R, L XOR F(R, k))
+</code></pre>
+<br>
+<p>Это сеть Фейстеля.</p>
+<br>
+<h3>1.7. Полное шифрование блока</h3>
+<br>
+<p>Код:</p>
+<br>
+<pre><code class="language-c">
+for (int round = 0; round &lt; 12; round++) {
+    uint8_t key_element = key[schedule[round]];
+    minigost_round(&amp;block, key_element);
+}
+
+uint8_t n1 = (block &gt;&gt; 8) &amp; 0xFF;
+uint8_t n2 = block &amp; 0xFF;
+block = ((uint16_t)n2 &lt;&lt; 8) | n1;
+</code></pre>
+<br>
+<p>То есть:</p>
+<br>
+<pre><code class="language-text">
+1. Выполнить 12 раундов по расписанию ключей.
+2. После 12-го раунда поменять местами левый и правый полублок.
+</code></pre>
+<br>
+<p>Если обозначить вход как <code>(L0, R0)</code>, то каждый раунд:</p>
+<br>
+<pre><code class="language-text">
+(L(i+1), R(i+1)) = (R(i), L(i) XOR F(R(i), round_key(i)))
+</code></pre>
+<br>
+<p>После последнего раунда:</p>
+<br>
+<pre><code class="language-text">
+ciphertext = swap(L12, R12)
+</code></pre>
+<br>
+<h3>1.8. Расшифрование блока</h3>
+<br>
+<p>Код:</p>
+<br>
+<pre><code class="language-c">
+uint8_t n1 = (block &gt;&gt; 8) &amp; 0xFF;
+uint8_t n2 = block &amp; 0xFF;
+block = ((uint16_t)n2 &lt;&lt; 8) | n1;
+
+for (int round = 11; round &gt;= 0; round--) {
+    uint8_t key_element = key[schedule[round]];
+    minigost_round_inv(&amp;block, key_element);
+}
+</code></pre>
+<br>
+<p>Обратный раунд:</p>
+<br>
+<pre><code class="language-c">
+uint8_t n1 = (*block &gt;&gt; 8) &amp; 0xFF;
+uint8_t n2 = *block &amp; 0xFF;
+uint8_t g = round_function(n1, key_element);
+uint8_t new_n1 = n2 ^ g;
+*block = ((uint16_t)new_n1 &lt;&lt; 8) | n1;
+</code></pre>
+<br>
+<p>То есть:</p>
+<br>
+<pre><code class="language-text">
+(L, R) -&gt; (R XOR F(L, k), L)
+</code></pre>
+<br>
+<p>Порядок действий:</p>
+<br>
+<pre><code class="language-text">
+1. Сначала делается обратная финальная перестановка.
+2. Затем идут 12 обратных раундов в обратном порядке ключей.
+</code></pre>
+<br>
+<h3>1.9. ECB режим</h3>
+<br>
+<p>Код собирает 16-битный блок из двух байтов в big-endian виде:</p>
+<br>
+<pre><code class="language-c">
+uint16_t block = ((uint16_t)plaintext[i] &lt;&lt; 8) | plaintext[i + 1];
+</code></pre>
+<br>
+<p>Каждый блок шифруется независимо:</p>
+<br>
+<pre><code class="language-text">
+Cj = Enc_K(Pj)
+</code></pre>
+<br>
+<p>Ограничение:</p>
+<p>- длина входа должна быть кратна <code>2</code>;</p>
+<p>- иначе функция возвращает <code>-1</code>.</p>
+<br>
+<h2>2. Алгоритм расчёта delta_pi</h2>
+<br>
+<h3>2.1. Что считается функцией pi</h3>
+<br>
+<p>В <code>tools/compute_delta_pi.c</code> шифрование не вычисляется на лету. Подключается готовая lookup-таблица:</p>
+<br>
+<pre><code class="language-c">
+#include &quot;lookup_tables/DEADBEEF_lookup.h&quot;
+</code></pre>
+<br>
+<p>Значит:</p>
+<br>
+<pre><code class="language-text">
+pi(x) = MINIGOST_LOOKUP_TABLE[x]
+</code></pre>
+<br>
+<p>для всех <code>x</code> от <code>0</code> до <code>65535</code>.</p>
+<br>
+<h3>2.2. Пространство перебора</h3>
+<br>
+<p>По коду:</p>
+<p>- <code>N = 65536 = 2^16</code>;</p>
+<p>- перебираются все <code>beta</code> от <code>1</code> до <code>65535</code>;</p>
+<p>- для каждого <code>beta</code> перебираются все <code>alpha</code> от <code>1</code> до <code>65535</code>.</p>
+<br>
+<p>Нулевые маски не учитываются.</p>
+<br>
+<h3>2.3. Вектор для фиксированного beta</h3>
+<br>
+<p>Код:</p>
+<br>
+<pre><code class="language-c">
+for (int x = 0; x &lt; 65536; x++) {
+    uint16_t y = lookup_table[x];
+    f[x] = parity16(beta &amp; y) ? -1 : 1;
+}
+</code></pre>
+<br>
+<p>Здесь <code>parity16(z)</code> — чётность числа единиц в <code>z</code>.</p>
+<br>
+<p>То есть строится вектор:</p>
+<br>
+<pre><code class="language-text">
+f_beta(x) =  1, если parity(beta &amp; pi(x)) = 0
+f_beta(x) = -1, если parity(beta &amp; pi(x)) = 1
+</code></pre>
+<br>
+<p>или короче:</p>
+<br>
+<pre><code class="language-text">
+f_beta(x) = (-1)^(&lt;beta, pi(x)&gt;)
+</code></pre>
+<br>
+<h3>2.4. Walsh-Hadamard transform</h3>
+<br>
+<p>Код:</p>
+<br>
+<pre><code class="language-c">
+for (int len = 1; len &lt; 65536; len &lt;&lt;= 1) {
+    for (int start = 0; start &lt; 65536; start += (len &lt;&lt; 1)) {
+        for (int i = 0; i &lt; len; i++) {
+            int a = f[start + i];
+            int b = f[start + i + len];
+            f[start + i]       = a + b;
+            f[start + i + len] = a - b;
+        }
+    }
+}
+</code></pre>
+<br>
+<p>После этого <code>f[alpha]</code> — коэффициент Уолша для маски <code>alpha</code>.</p>
+<br>
+<h3>2.5. Корреляция и delta_pi</h3>
+<br>
+<p>Код:</p>
+<br>
+<pre><code class="language-c">
+const float norm = 1.0f / 65536.0f;
+float correlation = -(float)f[alpha] * norm;
+float abs_correlation = fabsf(correlation);
+</code></pre>
+<br>
+<p>То есть:</p>
+<br>
+<pre><code class="language-text">
+c(alpha, beta) = -f[alpha] / 65536
+delta_pi = max |c(alpha, beta)|
+</code></pre>
+<br>
+<p>При нахождении нового максимума сохраняются:</p>
+<p>- <code>alpha_max</code>;</p>
+<p>- <code>beta_max</code>;</p>
+<p>- <code>correlation_value</code>;</p>
+<p>- <code>max_correlation</code>.</p>
+<br>
+<h3>2.6. Что делает программа пошагово</h3>
+<br>
+<p>1. Берёт готовую lookup-таблицу <code>pi</code>.</p>
+<p>2. Для каждого <code>beta != 0</code> строит вектор длины <code>65536</code>.</p>
+<p>3. Применяет FWT.</p>
+<p>4. Для каждого <code>alpha != 0</code> вычисляет корреляцию.</p>
+<p>5. Ищет максимальный модуль корреляции.</p>
+<p>6. Печатает результат и сохраняет его в <code>delta_pi_result.txt</code>.</p>
+<br>
+<h2>3. Как всё используется в проекте</h2>
+<br>
+<h3>3.1. Базовая реализация шифра</h3>
+<br>
+<p>Основные файлы:</p>
+<p>- <code>src/minigost.c</code></p>
+<p>- <code>include/minigost.h</code></p>
+<br>
+<p>Проверка:</p>
+<br>
+<pre><code class="language-bash">
+make test
+</code></pre>
+<br>
+<h3>3.2. Использование как C-библиотеки</h3>
+<br>
+<p>Сборка библиотек:</p>
+<br>
+<pre><code class="language-bash">
+make lib/libminigost.a
+make lib/libminigost.dylib   # macOS
+</code></pre>
+<br>
+<p>Пример интеграции:</p>
+<br>
+<pre><code class="language-bash">
+make example
+</code></pre>
+<br>
+<h3>3.3. Python-обёртка над C</h3>
+<br>
+<p>Запуск:</p>
+<br>
+<pre><code class="language-bash">
+make python
+</code></pre>
+<br>
+<h3>3.4. Генерация lookup-таблицы</h3>
+<br>
+<p>Таблица строится так:</p>
+<br>
+<pre><code class="language-python">
+for block in range(0x10000):
+    encrypted = cipher.encrypt_block(block, key)
+    lookup_table.append(encrypted)
+</code></pre>
+<br>
+<p>То есть материализуется полное отображение:</p>
+<br>
+<pre><code class="language-text">
+x -&gt; pi(x)
+</code></pre>
+<br>
+<p>Поддерживаются форматы:</p>
+<p>- <code>.bin</code></p>
+<p>- <code>.h</code></p>
+<p>- <code>.md</code></p>
+<p>- <code>.py</code></p>
+<br>
+<p>Запуск:</p>
+<br>
+<pre><code class="language-bash">
+python3 tools/generate_lookup_table.py --key 0xDEADBEEF
+./generate_lookup.sh
+</code></pre>
+<br>
+<h3>3.5. Расчёт delta_pi</h3>
+<br>
+<p>Запуск:</p>
+<br>
+<pre><code class="language-bash">
+./run_delta_pi.sh
+</code></pre>
+<br>
+<p>Что делает скрипт:</p>
+<p>1. Проверяет наличие <code>lookup_tables/DEADBEEF_lookup.h</code>.</p>
+<p>2. Компилирует <code>tools/compute_delta_pi.c</code>.</p>
+<p>3. Запускает <code>build/compute_delta_pi</code>.</p>
+<p>4. Перекладывает <code>delta_pi_result.txt</code> в <code>results/</code>.</p>
+<br>
+<p>Важно: <code>tools/compute_delta_pi.c</code> сейчас жёстко подключает конкретный header-файл, так что без смены <code>#include</code> он считает <code>delta_pi</code> только для уже выбранного ключа.</p>
+<br>
+<h3>3.6. Проверка корректности</h3>
+<br>
+<p>Полное сравнение Python и C по всем <code>65536</code> блокам:</p>
+<br>
+<pre><code class="language-bash">
+make compare
+</code></pre>
+<br>
+<p>Смысл проверки:</p>
+<br>
+<pre><code class="language-python">
+blocks = range(0x10000)
+py_results = run_python_batch(cipher, mode, py_key, blocks)
+c_results = run_c_batch(runner, mode, c_key, blocks)
+</code></pre>
+<br>
+<h3>3.7. Минимальный набор рабочих сценариев</h3>
+<br>
+<pre><code class="language-bash">
+make test
+make example
+make benchmark
+make compare
+make python
+python3 tools/generate_lookup_table.py --key 0xDEADBEEF
+./generate_lookup.sh
+./run_delta_pi.sh
+python3 verify_correlation.py
+sage verify_in_sage.py
+./batch_compute_delta_pi.sh 10
+</code></pre>
+<br>
+<h2>4. Короткий вывод</h2>
+<br>
+<p>Сейчас проект состоит из трёх основных частей:</p>
+<br>
+<p>1. Реализация МиниГОСТ как 12-раундовой сети Фейстеля над 16-битным блоком и 32-битным ключом.</p>
+<p>2. Генерация полной lookup-таблицы <code>pi : {0,1}^16 -> {0,1}^16</code> для фиксированного ключа.</p>
+<p>3. Вычисление <code>delta_pi = max |c(alpha, beta)|</code> через полный перебор масок и FWT.</p>
+<br>
+<br>
+<br>
+<h1>Начинаем восстанавливать ключи</h1>
+<br>
+<p>заметим, что $H_i^{-1} = TH_iT$</p>
+<p>а значит справледлива следующая запись:</p>
+<br>
+<p>$H_1H_2H_3H_4H_1H_2H_3H_4H_4H_3T = H_1H_2H_3H_4H_1H_2H_3H_4H_4H_3H_2H_1T(TH_1T)(TH_2T)$</p>
+<br>
+<p>Теперь</p>
+<br>
+<p>Переберем $N = 10^3$ ключей</p>
+<br>
+<p>$\forall K = (K_1,K_2,K_3,K_4):$</p>
+<p>Вычислим $\overline{F_k}=H_1H_2H_3H_4H_1H_2H_3H_4H_4H_3$ (через K обозначим истинный ключ)</p>
+<br>
+<p>находим $\alpha,\beta\in V_{16}: |\delta_{\alpha,\beta}^{\overline{F_k}}| = max = \delta^{\overline{F_k}}$</p>
+<br>
+<p>для данной $\alpha,\beta$ и ключа K достраиваем до полного шифра: $E_k = \overline{F_k} H_2 H_1 T$</p>
+<br>
+<p>для $E_k$ строим траблицу переходов (массив $p[]$) из $2^{16}$ адресов, где по адресу $x\in \overline{0, 2^{16}-1}$ находится $E_k(x)$</p>
+<br>
+<p>Далее</p>
+<p>___</p>
+<br>
+<p>$\forall K&#x27; = (K&#x27;_1, K&#x27;_2)\in V_{16}$</p>
+<br>
+<p>&gt; S := 0</p>
+<br>
+<p>&gt; $\forall x\in \overline{0, \frac{M}{(\delta^{\overline{F_k}})^2}} \approx 2^{14}$, где $M\in \overline{1,10}$</p>
+<br>
+<p>&gt; &gt; y:= p[x]</p>
+<br>
+<p>&gt; &gt; Если $(\alpha, x) = (\beta, T H_1 H_2 T)$, то S++</p>
+<br>
+<p>$S:=\frac{S}{2^{16}}$</p>
+<br>
+<p>$\overline{\delta}=2S-1$</p>
+<br>
+<p>___</p>
+<br>
+<p>тут $(x,y) = +\sum\limits_{i=1}^{16}x_iy_i$ - сумма по модулю 2</p>
+<br>
+<p>Ожидаемый результат в теории:</p>
+<br>
+<p>- Если $K&#x27; = (K1,K2)$ - истинный, то $\overline{\delta} = \delta^{F_k}$</p>
+<p>- Если ложный, то $\overline{\delta} \approx 0$</p>
+<br>
+<p>А что будет у нас:</p>
+<p>- Если истинный, то $\overline{\delta} \approx \delta^{F_k}$</p>
+<p>- Если ложный, то ? - надо выяснить, насколько это близко к $\delta^{F_k}$</p>
+    
+    <script>
+        // Добавляем кнопку для печати
+        window.onload = function() {
+            const printBtn = document.createElement('button');
+            printBtn.textContent = '📄 Сохранить как PDF';
+            printBtn.style.cssText = 'position: fixed; top: 20px; right: 20px; padding: 10px 20px; background: #3498db; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 14px; box-shadow: 0 2px 5px rgba(0,0,0,0.2); z-index: 1000;';
+            printBtn.onclick = () => window.print();
+            document.body.appendChild(printBtn);
+            
+            // Скрываем кнопку при печати
+            const style = document.createElement('style');
+            style.textContent = '@media print { button { display: none; } }';
+            document.head.appendChild(style);
+        };
+    </script>
+</body>
+</html>
