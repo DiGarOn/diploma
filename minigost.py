@@ -45,10 +45,10 @@ class MiniGost:
         return self._rotl8((self._Pi((x + y) & 0xFF)), 5)
 
     def _round(self, y: int, left: int, right: int) -> tuple[int, int]:
-        return right, left ^ self.g(y, right)
+        return right ^ self.g(y, left), left
 
     def _inverse_round(self, y: int, left: int, right: int) -> tuple[int, int]:
-        return right ^ self.g(y, left), left
+        return right, self.g(y, right) ^ left
 
     @staticmethod
     def _split_block(block: int) -> tuple[int, int]:

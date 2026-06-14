@@ -43,7 +43,10 @@ cat > /tmp/header.tex << 'EOF'
 
 % Шрифты
 \usepackage{fontspec}
-\setmonofont[Scale=0.8]{Monaco}
+\setmainfont{Times New Roman}
+\newfontfamily\cyrillicfont{Times New Roman}
+\setmonofont[Scale=0.8]{Menlo}
+\newfontfamily\cyrillicfonttt[Scale=0.8]{Menlo}
 \defaultfontfeatures{Ligatures=TeX}
 
 % Таблицы

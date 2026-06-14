@@ -18,7 +18,8 @@ cat > /tmp/pdf_header.tex << 'EOF'
 % Шрифты
 \usepackage{fontspec}
 \setmainfont{Times New Roman}
-\setmonofont[Scale=0.7]{Courier New}
+\setmonofont[Scale=0.7]{Menlo}
+\newfontfamily\cyrillicfonttt[Scale=0.7]{Menlo}
 
 % Для кода с переносами
 \usepackage{listings}
@@ -64,14 +65,6 @@ cat > /tmp/pdf_header.tex << 'EOF'
 \hyphenpenalty=10000
 \exhyphenpenalty=100
 
-% Переопределяем verbatim для лучших переносов
-\usepackage{fancyvrb}
-\RecustomVerbatimEnvironment{verbatim}{Verbatim}{
-    fontsize=\scriptsize,
-    breaklines=true,
-    breakanywhere=true
-}
-
 % Отступы
 \setlength{\parskip}{6pt}
 \setlength{\parindent}{0pt}
@@ -85,6 +78,7 @@ EOF
 pandoc IMPLEMENTATION_SHORT.md \
     -o IMPLEMENTATION_SHORT.pdf \
     --pdf-engine=xelatex \
+    --listings \
     --include-in-header=/tmp/pdf_header.tex \
     --toc \
     --toc-depth=2 \

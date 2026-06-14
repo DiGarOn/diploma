@@ -13,8 +13,8 @@ import sys
 
 # ========== Параметры из C программы ==========
 KEY = 0xDEADBEEF
-ALPHA = 0xEF7F
-BETA = 0x0542
+ALPHA = 0x7FEF
+BETA = 0x4205
 EXPECTED_CORRELATION = 0.0253906250
 
 print('╔═══════════════════════════════════════════════════════════════╗')

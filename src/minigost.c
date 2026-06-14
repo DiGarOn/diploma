@@ -36,45 +36,47 @@ static inline uint8_t round_function(uint8_t n1, uint8_t k) {
 }
 
 /**
- * Одна раундовая функция шифрования МиниГОСТ (сеть Фейстеля).
- * Преобразует 16-битный блок: (L, R) -> (R, L XOR F(R, K))
- * 
+ * Одна раундовая функция шифрования МиниГОСТ.
+ * В терминах V8 сложение реализуется как XOR:
+ * (L, R) -> (R + F(L, K), L) = (R XOR F(L, K), L)
+ *
  * @param block Указатель на 16-битный блок (изменяется на месте)
  * @param key_element Ключевой элемент для этого раунда
  */
-static inline void minigost_round(uint16_t *block, uint8_t key_element) {
+static inline void minigost_encrypt_round(uint16_t *block, uint8_t key_element) {
     uint8_t n1 = (*block >> 8) & 0xFF;   // Левый полублок (старший байт)
     uint8_t n2 = *block & 0xFF;          // Правый полублок (младший байт)
-    
-    // Применяем раундовую функцию к правому полублоку
-    uint8_t g = round_function(n2, key_element);
-    
-    // Новый правый полублок = Левый XOR F(Правый, K)
-    uint8_t new_n2 = n1 ^ g;
-    
-    // Новый блок: (R, L XOR F(R, K)) = (N2, new_N2)
-    *block = ((uint16_t)n2 << 8) | new_n2;
+
+    // Применяем раундовую функцию к левому полублоку
+    uint8_t g = round_function(n1, key_element);
+
+    // Новый левый полублок = Правый XOR F(Левый, K)
+    uint8_t new_n1 = n2 ^ g;
+
+    // Новый блок: (R XOR F(L, K), L) = (new_N1, N1)
+    *block = ((uint16_t)new_n1 << 8) | n1;
 }
 
 /**
  * Обратная раундовая функция для расшифрования МиниГОСТ.
- * Преобразует 16-битный блок: (L, R) -> (R XOR F(L, K), L)
- * 
+ * В терминах V8 сложение реализуется как XOR:
+ * (L, R) -> (R, F(R, K) + L) = (R, F(R, K) XOR L)
+ *
  * @param block Указатель на 16-битный блок (изменяется на месте)
  * @param key_element Ключевой элемент для этого раунда
  */
-static inline void minigost_round_inv(uint16_t *block, uint8_t key_element) {
+static inline void minigost_decrypt_round(uint16_t *block, uint8_t key_element) {
     uint8_t n1 = (*block >> 8) & 0xFF;   // Левый полублок (старший байт)
     uint8_t n2 = *block & 0xFF;          // Правый полублок (младший байт)
-    
-    // Применяем раундовую функцию к левому полублоку
-    uint8_t g = round_function(n1, key_element);
-    
-    // Новый левый полублок = Правый XOR F(Левый, K)
-    uint8_t new_n1 = n2 ^ g;
-    
-    // Новый блок: (R XOR F(L, K), L) = (new_N1, N1)
-    *block = ((uint16_t)new_n1 << 8) | n1;
+
+    // Применяем раундовую функцию к правому полублоку
+    uint8_t g = round_function(n2, key_element);
+
+    // Новый правый полублок = Левый XOR F(Правый, K)
+    uint8_t new_n2 = n1 ^ g;
+
+    // Новый блок: (R, F(R, K) XOR L) = (N2, new_N2)
+    *block = ((uint16_t)n2 << 8) | new_n2;
 }
 
 /**
@@ -95,7 +97,7 @@ uint16_t minigost_encrypt_block(uint16_t plaintext, const uint8_t key[4]) {
     // K^(1), K^(2), K^(3), K^(4), K^(1), K^(2), K^(3), K^(4), K^(4), K^(3), K^(2), K^(1)
     for (int round = 0; round < 12; round++) {
         uint8_t key_element = key[schedule[round]];
-        minigost_round(&block, key_element);
+        minigost_encrypt_round(&block, key_element);
     }
     
     // Финальная перестановка полублоков (undo последней перестановки раунда)
@@ -127,7 +129,7 @@ uint16_t minigost_decrypt_block(uint16_t ciphertext, const uint8_t key[4]) {
     // Используем обратный порядок раундовых ключей
     for (int round = 11; round >= 0; round--) {
         uint8_t key_element = key[schedule[round]];
-        minigost_round_inv(&block, key_element);
+        minigost_decrypt_round(&block, key_element);
     }
     
     return block;

@@ -21,9 +21,6 @@ def parse_u32(value: str) -> int:
 
 def build_runner() -> Path:
     runner = ROOT / "build" / "minigost_c_runner"
-    if runner.exists():
-        return runner
-
     subprocess.run(
         ["make", str(runner.relative_to(ROOT))],
         cwd=ROOT,
