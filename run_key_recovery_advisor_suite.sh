@@ -16,6 +16,8 @@ SAMPLE_CAP=65536
 M10=10
 M100=100
 FULL_M=100
+BACKEND=auto
+CUDA_THRESHOLD_COUNT=128
 SUITE_DIR=""
 CURRENT_PHASE="initializing"
 SUITE_SUCCESS=0
@@ -139,6 +141,14 @@ while [ $# -gt 0 ]; do
             SAMPLE_CAP="$2"
             shift 2
             ;;
+        --backend)
+            BACKEND="$2"
+            shift 2
+            ;;
+        --cuda-threshold-count)
+            CUDA_THRESHOLD_COUNT="$2"
+            shift 2
+            ;;
         --m10)
             M10="$2"
             shift 2
@@ -181,6 +191,8 @@ sample_cap=$SAMPLE_CAP
 m10=$M10
 m100=$M100
 full_m=$FULL_M
+backend=$BACKEND
+cuda_threshold_count=$CUDA_THRESHOLD_COUNT
 reference_overview=$REFERENCE_OVERVIEW
 EOF
 
@@ -205,11 +217,7 @@ fi
 CURRENT_PHASE="compiling"
 write_suite_progress_snapshot
 log_suite_progress "compiling key_recovery_experiment"
-gcc -O3 -Wall -Wextra -std=c11 -march=native \
-    -pthread \
-    -o "$BUILD_DIR/key_recovery_experiment" \
-    "$ROOT_DIR/tools/key_recovery_experiment.c" \
-    -lm
+bash "$ROOT_DIR/tools/build_key_recovery_experiment.sh" "$ROOT_DIR" "$BUILD_DIR" | tee "$SUITE_DIR/build_backend.txt"
 
 CURRENT_PHASE="verifying_th1h2t"
 write_suite_progress_snapshot
@@ -253,6 +261,8 @@ run_series() {
                 --top "$TOP" \
                 --threads "$THREADS" \
                 --sample-cap "$SAMPLE_CAP" \
+                --backend "$BACKEND" \
+                --cuda-threshold-count "$CUDA_THRESHOLD_COUNT" \
                 --reuse-prefix-summary "$reuse_prefix_summary" \
                 "$@"
         else
@@ -265,6 +275,8 @@ run_series() {
                 --top "$TOP" \
                 --threads "$THREADS" \
                 --sample-cap "$SAMPLE_CAP" \
+                --backend "$BACKEND" \
+                --cuda-threshold-count "$CUDA_THRESHOLD_COUNT" \
                 "$@"
         fi
     else
@@ -277,6 +289,8 @@ run_series() {
                 --top "$TOP" \
                 --threads "$THREADS" \
                 --sample-cap "$SAMPLE_CAP" \
+                --backend "$BACKEND" \
+                --cuda-threshold-count "$CUDA_THRESHOLD_COUNT" \
                 --reuse-prefix-summary "$reuse_prefix_summary" \
                 "$@"
         else
@@ -288,6 +302,8 @@ run_series() {
                 --top "$TOP" \
                 --threads "$THREADS" \
                 --sample-cap "$SAMPLE_CAP" \
+                --backend "$BACKEND" \
+                --cuda-threshold-count "$CUDA_THRESHOLD_COUNT" \
                 "$@"
         fi
     fi
@@ -310,6 +326,7 @@ log_suite_progress "finalizing suite"
 postprocess_suite
 
 write_status "completed"
+CURRENT_PHASE="completed"
 write_suite_progress_snapshot
 log_suite_progress "suite completed"
 SUITE_SUCCESS=1

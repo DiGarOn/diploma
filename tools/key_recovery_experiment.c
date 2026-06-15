@@ -11,6 +11,8 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "key_recovery_cuda_backend.h"
+
 static const uint8_t PREP_PHASE_TABLE[256] = {
     216,  25,  88, 120,  57,  89, 184, 153,  56, 217, 152, 248, 121, 185,  24, 249,
     200,   9,  72, 104,  41,  73, 168, 137,  40, 201, 136, 232, 105, 169,   8, 233,
@@ -66,18 +68,6 @@ typedef struct {
 } IterationResult;
 
 typedef struct {
-    uint16_t alpha;
-    uint16_t beta;
-    float delta;
-    int32_t signed_correlation;
-    int32_t abs_coeff;
-    uint32_t exact_pair_count;
-    uint32_t tol_pair_count;
-    int32_t tol_signed_min;
-    int32_t tol_signed_max;
-} PrefixSpectrum;
-
-typedef struct {
     uint16_t index;
     int32_t score;
 } CandidateScore;
@@ -97,6 +87,8 @@ typedef struct {
     bool full_material;
     uint32_t thread_count;
     const char *reuse_prefix_summary;
+    KeyRecoveryBackend backend_mode;
+    uint32_t cuda_threshold_count;
 } Config;
 
 typedef struct {
@@ -143,6 +135,18 @@ static const char *path_basename_const(const char *path) {
 
 static const char *sample_mode_name(const Config *config) {
     return config->full_material ? "full_domain" : "adaptive_random_without_replacement";
+}
+
+static const char *backend_mode_name(KeyRecoveryBackend backend) {
+    switch (backend) {
+        case KEY_RECOVERY_BACKEND_CPU:
+            return "cpu";
+        case KEY_RECOVERY_BACKEND_CUDA:
+            return "cuda";
+        case KEY_RECOVERY_BACKEND_AUTO:
+        default:
+            return "auto";
+    }
 }
 
 static void write_iteration_progress(
@@ -540,6 +544,46 @@ static PrefixSpectrum compute_prefix_spectrum(const uint16_t *lookup_table, uint
     return result;
 }
 
+static int select_active_backend(
+    const Config *config,
+    KeyRecoveryBackend *active_backend,
+    KeyRecoveryCudaInfo *cuda_info
+) {
+    if (cuda_info) {
+        key_recovery_cuda_query(cuda_info);
+    }
+
+    if (config->reuse_prefix_summary) {
+        *active_backend = KEY_RECOVERY_BACKEND_CPU;
+        return 0;
+    }
+
+    if (config->backend_mode == KEY_RECOVERY_BACKEND_CPU) {
+        *active_backend = KEY_RECOVERY_BACKEND_CPU;
+        return 0;
+    }
+
+    if (config->backend_mode == KEY_RECOVERY_BACKEND_CUDA) {
+        if (!cuda_info || !cuda_info->available) {
+            fprintf(
+                stderr,
+                "Запрошен backend=cuda, но CUDA недоступна: %s\n",
+                (cuda_info && cuda_info->status[0] != '\0') ? cuda_info->status : "unknown error"
+            );
+            return -1;
+        }
+        *active_backend = KEY_RECOVERY_BACKEND_CUDA;
+        return 0;
+    }
+
+    if (cuda_info && cuda_info->available && config->iterations >= config->cuda_threshold_count) {
+        *active_backend = KEY_RECOVERY_BACKEND_CUDA;
+    } else {
+        *active_backend = KEY_RECOVERY_BACKEND_CPU;
+    }
+    return 0;
+}
+
 static uint64_t splitmix64_next(uint64_t *state) {
     uint64_t z = (*state += 0x9E3779B97F4A7C15ull);
     z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
@@ -765,6 +809,7 @@ static int write_full_candidates(
 
 static int run_iteration(
     const Config *config,
+    KeyRecoveryBackend active_backend,
     uint32_t iteration_index,
     uint32_t key32,
     FILE *summary_csv,
@@ -795,6 +840,18 @@ static int run_iteration(
     if (cached_prefix) {
         spectrum = cached_prefix->spectrum;
         result.delta_time_sec = 0.0;
+    } else if (active_backend == KEY_RECOVERY_BACKEND_CUDA) {
+        char cuda_error[256] = {0};
+        if (key_recovery_cuda_compute_prefix_spectrum(
+            key32,
+            &spectrum,
+            &result.delta_time_sec,
+            cuda_error,
+            sizeof(cuda_error)
+        ) != 0) {
+            fprintf(stderr, "CUDA prefix spectrum failed for key 0x%08" PRIX32 ": %s\n", key32, cuda_error);
+            return -1;
+        }
     } else {
         delta_start = now_sec();
         for (uint32_t x = 0; x < 65536u; x++) {
@@ -1109,6 +1166,8 @@ static void print_usage(const char *argv0) {
         "  --full-material         Force sample_count = 65536 for every experiment\n"
         "  --top N                 Save top-N candidates per key (default: 32)\n"
         "  --threads N             Number of CPU threads for spectrum search\n"
+        "  --backend MODE          Prefix backend: auto, cpu, cuda (default: auto)\n"
+        "  --cuda-threshold-count  In auto mode use CUDA from this key count (default: 128)\n"
         "  --reuse-prefix-summary  Reuse prefix spectrum from another summary.csv\n"
         "  --resume                Continue appending to existing summary.csv\n"
         "  --save-full-candidates  Save all 65536 candidate scores per key\n"
@@ -1145,6 +1204,22 @@ static int parse_double_value(const char *value, double *out) {
     }
     *out = parsed;
     return 0;
+}
+
+static int parse_backend_mode(const char *value, KeyRecoveryBackend *out) {
+    if (strcmp(value, "auto") == 0) {
+        *out = KEY_RECOVERY_BACKEND_AUTO;
+        return 0;
+    }
+    if (strcmp(value, "cpu") == 0) {
+        *out = KEY_RECOVERY_BACKEND_CPU;
+        return 0;
+    }
+    if (strcmp(value, "cuda") == 0) {
+        *out = KEY_RECOVERY_BACKEND_CUDA;
+        return 0;
+    }
+    return -1;
 }
 
 static int parse_i32(const char *value, int32_t *out) {
@@ -1330,6 +1405,8 @@ int main(int argc, char **argv) {
         .full_material = false,
         .thread_count = 0,
         .reuse_prefix_summary = NULL,
+        .backend_mode = KEY_RECOVERY_BACKEND_AUTO,
+        .cuda_threshold_count = 128,
     };
     char summary_path[1024];
     char meta_path[1024];
@@ -1343,6 +1420,8 @@ int main(int argc, char **argv) {
     int32_t *candidate_scores = NULL;
     PrefixCacheEntry *prefix_cache_entries = NULL;
     uint32_t prefix_cache_count = 0;
+    KeyRecoveryBackend active_backend = KEY_RECOVERY_BACKEND_CPU;
+    KeyRecoveryCudaInfo cuda_info = {0};
     uint64_t rng_state = 0;
     double run_start = 0.0;
     double run_end = 0.0;
@@ -1393,6 +1472,16 @@ int main(int argc, char **argv) {
                 fprintf(stderr, "Некорректное значение для --threads\n");
                 return 1;
             }
+        } else if (strcmp(argv[i], "--backend") == 0 && i + 1 < argc) {
+            if (parse_backend_mode(argv[++i], &config.backend_mode) != 0) {
+                fprintf(stderr, "Некорректное значение для --backend, ожидается auto|cpu|cuda\n");
+                return 1;
+            }
+        } else if (strcmp(argv[i], "--cuda-threshold-count") == 0 && i + 1 < argc) {
+            if (parse_u32(argv[++i], &config.cuda_threshold_count) != 0 || config.cuda_threshold_count == 0) {
+                fprintf(stderr, "Некорректное значение для --cuda-threshold-count\n");
+                return 1;
+            }
         } else if (strcmp(argv[i], "--reuse-prefix-summary") == 0 && i + 1 < argc) {
             config.reuse_prefix_summary = argv[++i];
         } else if (strcmp(argv[i], "--output-dir") == 0 && i + 1 < argc) {
@@ -1419,6 +1508,10 @@ int main(int argc, char **argv) {
 
     init_tables();
 
+    if (select_active_backend(&config, &active_backend, &cuda_info) != 0) {
+        return 1;
+    }
+
     if (config.reuse_prefix_summary) {
         if (load_prefix_cache(config.reuse_prefix_summary, &prefix_cache_entries, &prefix_cache_count) != 0) {
             return 1;
@@ -1433,7 +1526,7 @@ int main(int argc, char **argv) {
             free(prefix_cache_entries);
             return 1;
         }
-    } else {
+    } else if (active_backend == KEY_RECOVERY_BACKEND_CPU) {
         prefix_lookup = (uint16_t *)malloc(65536u * sizeof(uint16_t));
     }
 
@@ -1449,7 +1542,7 @@ int main(int argc, char **argv) {
     }
     candidate_scores = (int32_t *)malloc(65536u * sizeof(int32_t));
 
-    if ((!config.reuse_prefix_summary && !prefix_lookup) ||
+    if ((!config.reuse_prefix_summary && active_backend == KEY_RECOVERY_BACKEND_CPU && !prefix_lookup) ||
         !sample_plaintexts ||
         !sample_plain_parity ||
         !sample_cipher_hi ||
@@ -1502,6 +1595,13 @@ int main(int argc, char **argv) {
     fprintf(meta, "save_full_candidates=%s\n", config.save_full_candidates ? "yes" : "no");
     fprintf(meta, "resume=%s\n", config.resume ? "yes" : "no");
     fprintf(meta, "thread_count=%" PRIu32 "\n", config.thread_count);
+    fprintf(meta, "backend_mode=%s\n", backend_mode_name(config.backend_mode));
+    fprintf(meta, "active_backend=%s\n", backend_mode_name(active_backend));
+    fprintf(meta, "cuda_threshold_count=%" PRIu32 "\n", config.cuda_threshold_count);
+    fprintf(meta, "cuda_available=%s\n", cuda_info.available ? "yes" : "no");
+    if (cuda_info.status[0] != '\0') {
+        fprintf(meta, "cuda_status=%s\n", cuda_info.status);
+    }
     fprintf(meta, "reuse_prefix_summary=%s\n", config.reuse_prefix_summary ? config.reuse_prefix_summary : "(none)");
     fprintf(meta, "completed_before_start=%" PRIu32 "\n", start_iteration);
     fclose(meta);
@@ -1512,6 +1612,10 @@ int main(int argc, char **argv) {
     printf("M = %.3f, sample_cap = %" PRIu32 ", top = %" PRIu32 "\n", config.sample_factor_m, config.sample_cap, config.top_count);
     printf("Sampling: %s\n", sample_mode_name(&config));
     printf("Threads: %" PRIu32 "\n", config.thread_count);
+    printf("Backend: requested=%s active=%s\n", backend_mode_name(config.backend_mode), backend_mode_name(active_backend));
+    if (cuda_info.status[0] != '\0') {
+        printf("CUDA status: %s\n", cuda_info.status);
+    }
     printf("Series label: %s\n", config.series_label ? config.series_label : "default");
     if (config.reuse_prefix_summary) {
         printf("Reuse prefix summary: %s\n", config.reuse_prefix_summary);
@@ -1558,6 +1662,7 @@ int main(int argc, char **argv) {
         }
         if (run_iteration(
             &config,
+            active_backend,
             iteration,
             key32,
             summary_csv,

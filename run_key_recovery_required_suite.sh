@@ -13,6 +13,8 @@ SEED=1
 TOP=32
 THREADS=10
 SAMPLE_CAP=65536
+BACKEND=auto
+CUDA_THRESHOLD_COUNT=128
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -36,6 +38,14 @@ while [ $# -gt 0 ]; do
             SAMPLE_CAP="$2"
             shift 2
             ;;
+        --backend)
+            BACKEND="$2"
+            shift 2
+            ;;
+        --cuda-threshold-count)
+            CUDA_THRESHOLD_COUNT="$2"
+            shift 2
+            ;;
         *)
             echo "Неизвестный аргумент: $1"
             exit 1
@@ -51,11 +61,7 @@ echo "════════════════════════�
 echo "Suite dir: $SUITE_DIR"
 echo ""
 
-gcc -O3 -Wall -Wextra -std=c11 -march=native \
-    -pthread \
-    -o "$BUILD_DIR/key_recovery_experiment" \
-    "$ROOT_DIR/tools/key_recovery_experiment.c" \
-    -lm
+bash "$ROOT_DIR/tools/build_key_recovery_experiment.sh" "$ROOT_DIR" "$BUILD_DIR"
 
 python3 "$ROOT_DIR/tools/verify_th1h2t.py" \
     --key 0xDEADBEEF \
@@ -76,6 +82,8 @@ run_series() {
         --top "$TOP" \
         --threads "$THREADS" \
         --sample-cap "$SAMPLE_CAP" \
+        --backend "$BACKEND" \
+        --cuda-threshold-count "$CUDA_THRESHOLD_COUNT" \
         "$@"
 
     python3 "$ROOT_DIR/tools/summarize_key_recovery_run.py" --run-dir "$out_dir"
@@ -113,6 +121,8 @@ seed=$SEED
 top=$TOP
 threads=$THREADS
 sample_cap=$SAMPLE_CAP
+backend=$BACKEND
+cuda_threshold_count=$CUDA_THRESHOLD_COUNT
 series=adaptive_m10,adaptive_m100,full_material
 verification=th1h2t_verification.csv
 overview=series_overview.csv

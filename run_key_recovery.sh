@@ -42,11 +42,7 @@ echo "Результаты будут сохранены в:"
 echo "  $OUT_DIR"
 echo ""
 
-gcc -O3 -Wall -Wextra -std=c11 -march=native \
-    -pthread \
-    -o "$BUILD_DIR/key_recovery_experiment" \
-    "$ROOT_DIR/tools/key_recovery_experiment.c" \
-    -lm
+bash "$ROOT_DIR/tools/build_key_recovery_experiment.sh" "$ROOT_DIR" "$BUILD_DIR"
 
 echo "✓ Собран инструмент: $BUILD_DIR/key_recovery_experiment"
 echo ""
