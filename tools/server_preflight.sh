@@ -6,6 +6,14 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$ROOT_DIR/build"
 RESULTS_DIR="$ROOT_DIR/results/server_preflight"
 
+run_with_time() {
+    if [ -x /usr/bin/time ]; then
+        /usr/bin/time -p "$@"
+    else
+        time "$@"
+    fi
+}
+
 mkdir -p "$RESULTS_DIR"
 
 echo "== System =="
@@ -37,7 +45,7 @@ echo "== CPU smoke =="
 CPU_DIR="$RESULTS_DIR/cpu_smoke"
 rm -rf "$CPU_DIR"
 mkdir -p "$CPU_DIR"
-/usr/bin/time -p "$BUILD_DIR/key_recovery_experiment" \
+run_with_time "$BUILD_DIR/key_recovery_experiment" \
     --output-dir "$CPU_DIR" \
     --count 1 \
     --top 0 \
@@ -52,7 +60,7 @@ if [ "$BUILD_BACKEND" = "cuda" ]; then
     CUDA_DIR="$RESULTS_DIR/cuda_smoke"
     rm -rf "$CUDA_DIR"
     mkdir -p "$CUDA_DIR"
-    /usr/bin/time -p "$BUILD_DIR/key_recovery_experiment" \
+    run_with_time "$BUILD_DIR/key_recovery_experiment" \
         --output-dir "$CUDA_DIR" \
         --count 1 \
         --top 0 \
@@ -66,7 +74,7 @@ fi
 echo "== Advisor suite smoke =="
 SUITE_DIR="$RESULTS_DIR/advisor_suite_smoke"
 rm -rf "$SUITE_DIR"
-/usr/bin/time -p "$ROOT_DIR/run_key_recovery_advisor_suite.sh" \
+run_with_time "$ROOT_DIR/run_key_recovery_advisor_suite.sh" \
     --count 1 \
     --top 0 \
     --threads 2 \

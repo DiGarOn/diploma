@@ -1,0 +1,12 @@
+state=completed
+phase=building_artifacts
+updated_at=2026-06-16 13:02:13 UTC
+count=131072
+seed=1
+top=32
+threads=16
+sample_cap=65536
+m10=10
+m100=100
+full_m=100
+suite_dir=/workspace/diploma_run/results/key_recovery_suite/full_131072_20260615_1905

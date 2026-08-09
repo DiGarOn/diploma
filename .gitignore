@@ -55,6 +55,12 @@ dist/
 # Documentation build
 docs/_build/
 
+# Generated experiment artifacts
+deliverables/
+results/key_recovery/
+results/key_recovery_suite/
+results/server_preflight/
+
 # Temporary files
 *.tmp
 *.bak

@@ -16,6 +16,16 @@
 
 ⚠️ **Внимание**: Это учебная реализация. Не используйте ее для защиты реальных данных в продакшн-системах.
 
+## Воспроизведение экспериментов по восстановлению ключа
+
+Для проверки именно той части работы, которая связана с восстановлением последних раундовых подключей и CUDA-ускорением, смотреть нужно не только библиотеку шифрования, но и отдельный набор файлов:
+
+- [VALIDATION_RUNBOOK_RU.md](/Users/dmitriydmitriygarkin/Documents/HSE/diploma/VALIDATION_RUNBOOK_RU.md) — точные команды запуска и проверки на сервере.
+- [tools/server_run_4090.sh](/Users/dmitriydmitriygarkin/Documents/HSE/diploma/tools/server_run_4090.sh) — серверный вход для RTX 4090.
+- [run_key_recovery_advisor_suite.sh](/Users/dmitriydmitriygarkin/Documents/HSE/diploma/run_key_recovery_advisor_suite.sh) — основной orchestration-скрипт всего набора серий.
+- [tools/key_recovery_experiment.c](/Users/dmitriydmitriygarkin/Documents/HSE/diploma/tools/key_recovery_experiment.c) — основная C-реализация эксперимента.
+- [tools/key_recovery_cuda.cu](/Users/dmitriydmitriygarkin/Documents/HSE/diploma/tools/key_recovery_cuda.cu) — CUDA-реализация ускоренного расчета prefix spectrum.
+
 ## Структура проекта
 
 ```

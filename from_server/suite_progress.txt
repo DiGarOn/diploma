@@ -1,0 +1,7 @@
+updated_at=2026-06-16 13:02:13 UTC
+phase=completed
+adaptive_m10_completed=131072/131072
+adaptive_m100_completed=131072/131072
+full_material_completed=131072/131072
+total_completed=393216/393216
+log_file=/workspace/diploma_run/results/key_recovery_suite/full_131072_20260615_1905/background_run.log

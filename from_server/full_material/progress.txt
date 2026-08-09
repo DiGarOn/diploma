@@ -1,0 +1,11 @@
+updated_at=2026-06-16 13:00:19
+series_label=full_material
+completed_iterations=131072
+total_iterations=131072
+progress_percent=100.0000
+last_iteration=131072
+last_key=0x60E7E35E
+last_true_rank=1
+last_sample_count=65536
+last_prefix_delta=0.0288696289
+last_total_time_sec=0.1247

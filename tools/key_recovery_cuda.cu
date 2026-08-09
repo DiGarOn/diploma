@@ -27,7 +27,7 @@ static const uint8_t PREP_PHASE_TABLE_HOST[256] = {
     194,   3,  66,  98,  35,  67, 162, 131,  34, 195, 130, 226,  99, 163,   2, 227
 };
 
-static __constant__ uint8_t d_round_table[256 * 256];
+static __device__ uint8_t d_round_table[256 * 256];
 static __device__ __constant__ uint8_t d_prefix10_schedule[10] = {3, 2, 1, 0, 3, 2, 1, 0, 0, 1};
 
 typedef struct {
