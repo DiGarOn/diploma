@@ -23,7 +23,7 @@ if [ -f "$SUITE_DIR/suite_progress.txt" ]; then
     echo ""
 fi
 
-for series in adaptive_m10 adaptive_m100 full_material; do
+for series in adaptive_m1 adaptive_m10 full_material; do
     if [ -f "$SUITE_DIR/$series/progress.txt" ]; then
         echo "== $series/progress.txt =="
         cat "$SUITE_DIR/$series/progress.txt"

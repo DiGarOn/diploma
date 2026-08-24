@@ -52,8 +52,13 @@ typedef struct {
     uint8_t true_k2;
     int32_t true_score;
     double true_bias;
+    int32_t true_abs_score;
     int64_t false_score_sum;
     double false_bias_mean;
+    int64_t false_abs_score_sum;
+    double false_abs_bias_mean;
+    int32_t false_abs_max_score_value;
+    uint32_t false_abs_max_key_count_tol_1e_7;
     uint32_t true_rank;
     uint8_t best_k1;
     uint8_t best_k2;
@@ -226,6 +231,11 @@ static void format_fraction_i64(int64_t numerator, uint64_t denominator, char *b
     } else {
         snprintf(buf, buf_size, "%" PRId64 "/%" PRIu64, numerator, denominator);
     }
+}
+
+static int64_t round_fraction_abs_to_1e7_i64(int64_t numerator, uint64_t denominator) {
+    double value = fabs((double)numerator / (double)denominator);
+    return (int64_t)llround(value * 10000000.0);
 }
 
 static inline uint8_t round_function(uint8_t x, uint8_t k) {
@@ -414,7 +424,11 @@ static void *compute_prefix_spectrum_worker(void *arg) {
 }
 
 static uint32_t default_thread_count(void) {
+#ifdef _SC_NPROCESSORS_ONLN
     long cpu_count = sysconf(_SC_NPROCESSORS_ONLN);
+#else
+    long cpu_count = 4;
+#endif
     if (cpu_count <= 0) {
         return 4;
     }
@@ -937,10 +951,13 @@ static int run_iteration(
         int32_t best_abs = -1;
         int32_t min_abs = INT32_MAX;
         int64_t false_score_sum = 0;
+        int64_t false_abs_score_sum = 0;
+        int32_t false_abs_max_score = -1;
 
         result.true_score = candidate_scores[true_index];
         result.true_bias = (double)result.true_score / (double)result.sample_count;
         true_abs = result.true_score < 0 ? -result.true_score : result.true_score;
+        result.true_abs_score = true_abs;
 
         top = (CandidateScore *)calloc(config->top_count, sizeof(CandidateScore));
         if (!top) {
@@ -963,6 +980,10 @@ static int run_iteration(
 
             if (index != true_index) {
                 false_score_sum += (int64_t)score;
+                false_abs_score_sum += (int64_t)abs_score;
+                if (abs_score > false_abs_max_score) {
+                    false_abs_max_score = abs_score;
+                }
             }
             if (abs_score > true_abs) {
                 result.true_rank++;
@@ -996,9 +1017,31 @@ static int run_iteration(
 
         result.best_bias = (double)result.best_score / (double)result.sample_count;
         result.false_score_sum = false_score_sum;
+        result.false_abs_score_sum = false_abs_score_sum;
         result.false_bias_mean = (double)false_score_sum / ((double)result.sample_count * 65535.0);
+        result.false_abs_bias_mean = (double)false_abs_score_sum / ((double)result.sample_count * 65535.0);
+        result.false_abs_max_score_value = false_abs_max_score < 0 ? 0 : false_abs_max_score;
         result.min_abs_score_value = (min_abs == INT32_MAX) ? 0 : min_abs;
         result.top_hits = (true_abs == best_abs) ? result.best_tie_count : 0;
+        result.false_abs_max_key_count_tol_1e_7 = 0;
+
+        {
+            int64_t false_abs_max_scaled_1e7 = round_fraction_abs_to_1e7_i64(
+                (int64_t)result.false_abs_max_score_value,
+                (uint64_t)result.sample_count
+            );
+
+            for (uint32_t index = 0; index < 65536u; index++) {
+                int32_t score = candidate_scores[index];
+                int32_t abs_score = score < 0 ? -score : score;
+                if (index == true_index) {
+                    continue;
+                }
+                if (round_fraction_abs_to_1e7_i64((int64_t)abs_score, (uint64_t)result.sample_count) == false_abs_max_scaled_1e7) {
+                    result.false_abs_max_key_count_tol_1e_7++;
+                }
+            }
+        }
     }
 
     if (summary_csv) {
@@ -1007,28 +1050,43 @@ static int run_iteration(
         char prefix_tol_min_fraction[64];
         char prefix_tol_max_fraction[64];
         char true_fraction[64];
+        char true_abs_fraction[64];
         char false_mean_fraction[64];
+        char false_abs_mean_fraction[64];
+        char false_abs_max_fraction[64];
         char best_fraction[64];
+        char true_false_abs_diff_fraction[64];
         char max_abs_min_fraction[64];
         char max_abs_max_fraction[64];
         char min_abs_fraction[64];
         uint64_t sample_den = (uint64_t)result.sample_count;
         uint64_t false_mean_den = sample_den * 65535u;
+        int64_t true_false_abs_diff_num = (int64_t)result.true_abs_score * 65535ll - result.false_abs_score_sum;
+        double true_false_abs_ratio = 0.0;
+        double true_false_abs_diff = (double)true_false_abs_diff_num / (double)false_mean_den;
+
+        if (result.false_abs_score_sum > 0) {
+            true_false_abs_ratio = ((double)result.true_abs_score * 65535.0) / (double)result.false_abs_score_sum;
+        }
 
         format_fraction_i64((int64_t)result.delta_prefix_abs_coeff, 65536u, prefix_abs_fraction, sizeof(prefix_abs_fraction));
         format_fraction_i64((int64_t)result.delta_prefix_signed_coeff, 65536u, prefix_signed_fraction, sizeof(prefix_signed_fraction));
         format_fraction_i64((int64_t)result.delta_prefix_signed_coeff_min_tol_2_neg_15, 65536u, prefix_tol_min_fraction, sizeof(prefix_tol_min_fraction));
         format_fraction_i64((int64_t)result.delta_prefix_signed_coeff_max_tol_2_neg_15, 65536u, prefix_tol_max_fraction, sizeof(prefix_tol_max_fraction));
         format_fraction_i64((int64_t)result.true_score, sample_den, true_fraction, sizeof(true_fraction));
+        format_fraction_i64((int64_t)result.true_abs_score, sample_den, true_abs_fraction, sizeof(true_abs_fraction));
         format_fraction_i64(result.false_score_sum, false_mean_den, false_mean_fraction, sizeof(false_mean_fraction));
+        format_fraction_i64(result.false_abs_score_sum, false_mean_den, false_abs_mean_fraction, sizeof(false_abs_mean_fraction));
+        format_fraction_i64((int64_t)result.false_abs_max_score_value, sample_den, false_abs_max_fraction, sizeof(false_abs_max_fraction));
         format_fraction_i64((int64_t)result.best_score, sample_den, best_fraction, sizeof(best_fraction));
+        format_fraction_i64(true_false_abs_diff_num, false_mean_den, true_false_abs_diff_fraction, sizeof(true_false_abs_diff_fraction));
         format_fraction_i64((int64_t)result.max_abs_score_signed_min, sample_den, max_abs_min_fraction, sizeof(max_abs_min_fraction));
         format_fraction_i64((int64_t)result.max_abs_score_signed_max, sample_den, max_abs_max_fraction, sizeof(max_abs_max_fraction));
         format_fraction_i64((int64_t)result.min_abs_score_value, sample_den, min_abs_fraction, sizeof(min_abs_fraction));
 
         fprintf(
             summary_csv,
-            "%s,%s,%s,%.6f,%" PRIu32 ",%" PRIu32 ",%" PRIu64 ",%s,%" PRIu32 ",0x%08" PRIX32 ",0x%02X,0x%02X,0x%02X,0x%02X,0x%04X,0x%04X,%.10f,%" PRId32 ",65536,%s,%.10f,%" PRId32 ",65536,%s,%" PRIu32 ",%.10f,%.10f,%" PRIu32 ",0x%02X,0x%02X,%.10f,%" PRId32 ",%" PRIu32 ",%s,%" PRIu32 ",%.10f,%" PRId64 ",%" PRIu64 ",%s,0x%02X,0x%02X,%.10f,%" PRId32 ",%" PRIu32 ",%s,%" PRIu32 ",%" PRIu32 ",%.10f,%.10f,%" PRId32 ",%" PRId32 ",%s,%s,%.10f,%" PRId32 ",%" PRIu32 ",%s,%.4f,%.4f,%.4f\n",
+            "%s,%s,%s,%.6f,%" PRIu32 ",%" PRIu32 ",%" PRIu64 ",%s,%" PRIu32 ",0x%08" PRIX32 ",0x%02X,0x%02X,0x%02X,0x%02X,0x%04X,0x%04X,%.10f,%" PRId32 ",65536,%s,%.10f,%" PRId32 ",65536,%s,%" PRIu32 ",%.10f,%.10f,%" PRIu32 ",0x%02X,0x%02X,%.10f,%" PRId32 ",%" PRIu32 ",%s,%.10f,%" PRId32 ",%" PRIu32 ",%s,%" PRIu32 ",%.10f,%" PRId64 ",%" PRIu64 ",%s,%.10f,%" PRId64 ",%" PRIu64 ",%s,%.10f,%" PRId32 ",%" PRIu32 ",%s,%" PRIu32 ",0x%02X,0x%02X,%.10f,%" PRId32 ",%" PRIu32 ",%s,%.10f,%.10f,%" PRId64 ",%" PRIu64 ",%s,%" PRIu32 ",%" PRIu32 ",%.10f,%.10f,%" PRId32 ",%" PRId32 ",%s,%s,%.10f,%" PRId32 ",%" PRIu32 ",%s,%.4f,%.4f,%.4f\n",
             path_basename_const(config->output_dir),
             config->series_label ? config->series_label : "default",
             sample_mode_name(config),
@@ -1061,17 +1119,35 @@ static int run_iteration(
             result.true_score,
             result.sample_count,
             true_fraction,
+            (double)result.true_abs_score / (double)result.sample_count,
+            result.true_abs_score,
+            result.sample_count,
+            true_abs_fraction,
             result.true_rank,
             result.false_bias_mean,
             result.false_score_sum,
             false_mean_den,
             false_mean_fraction,
+            result.false_abs_bias_mean,
+            result.false_abs_score_sum,
+            false_mean_den,
+            false_abs_mean_fraction,
+            (double)result.false_abs_max_score_value / (double)result.sample_count,
+            result.false_abs_max_score_value,
+            result.sample_count,
+            false_abs_max_fraction,
+            result.false_abs_max_key_count_tol_1e_7,
             result.best_k1,
             result.best_k2,
             result.best_bias,
             result.best_score,
             result.sample_count,
             best_fraction,
+            true_false_abs_ratio,
+            true_false_abs_diff,
+            true_false_abs_diff_num,
+            false_mean_den,
+            true_false_abs_diff_fraction,
             result.best_tie_count,
             result.top_hits,
             (double)result.max_abs_score_signed_min / (double)result.sample_count,
@@ -1274,7 +1350,7 @@ static int load_prefix_cache(
     }
 
     while (fgets(line, sizeof(line), f) != NULL) {
-        char *tokens[64] = {0};
+        char *tokens[128] = {0};
         char *saveptr = NULL;
         char *token = NULL;
         size_t token_count = 0;
@@ -1282,35 +1358,78 @@ static int load_prefix_cache(
         double delta_abs_value = 0.0;
         double tol_min_value = 0.0;
         double tol_max_value = 0.0;
+        static int idx_iteration = -1;
+        static int idx_true_key = -1;
+        static int idx_prefix_alpha = -1;
+        static int idx_prefix_beta = -1;
+        static int idx_prefix_delta_abs_value = -1;
+        static int idx_prefix_delta_signed_num = -1;
+        static int idx_prefix_max_pair_count = -1;
+        static int idx_prefix_signed_min_tol = -1;
+        static int idx_prefix_signed_max_tol = -1;
+        static int idx_delta_time_sec = -1;
 
         if (strncmp(line, "RUN_ID,", 7) == 0) {
+            char *header_saveptr = NULL;
+            size_t i = 0;
+            token = strtok_r(line, ",\n\r", &header_saveptr);
+            while (token && i < 128) {
+                tokens[i++] = token;
+                token = strtok_r(NULL, ",\n\r", &header_saveptr);
+            }
+            idx_iteration = idx_true_key = idx_prefix_alpha = idx_prefix_beta = -1;
+            idx_prefix_delta_abs_value = idx_prefix_delta_signed_num = -1;
+            idx_prefix_max_pair_count = idx_prefix_signed_min_tol = idx_prefix_signed_max_tol = -1;
+            idx_delta_time_sec = -1;
+            for (size_t j = 0; j < i; j++) {
+                if (strcmp(tokens[j], "ITERATION") == 0) idx_iteration = (int)j;
+                else if (strcmp(tokens[j], "TRUE_KEY") == 0) idx_true_key = (int)j;
+                else if (strcmp(tokens[j], "PREFIX_ALPHA") == 0) idx_prefix_alpha = (int)j;
+                else if (strcmp(tokens[j], "PREFIX_BETA") == 0) idx_prefix_beta = (int)j;
+                else if (strcmp(tokens[j], "PREFIX_DELTA_ABS_VALUE") == 0) idx_prefix_delta_abs_value = (int)j;
+                else if (strcmp(tokens[j], "PREFIX_DELTA_SIGNED_NUMERATOR") == 0) idx_prefix_delta_signed_num = (int)j;
+                else if (strcmp(tokens[j], "PREFIX_MAX_PAIR_COUNT_TOL_2_NEG_15") == 0) idx_prefix_max_pair_count = (int)j;
+                else if (strcmp(tokens[j], "PREFIX_MAX_SIGNED_VALUE_MIN_TOL") == 0) idx_prefix_signed_min_tol = (int)j;
+                else if (strcmp(tokens[j], "PREFIX_MAX_SIGNED_VALUE_MAX_TOL") == 0) idx_prefix_signed_max_tol = (int)j;
+                else if (strcmp(tokens[j], "DELTA_TIME_SEC") == 0) idx_delta_time_sec = (int)j;
+            }
             continue;
         }
 
         token = strtok_r(line, ",\n\r", &saveptr);
-        while (token && token_count < 64) {
+        while (token && token_count < 128) {
             tokens[token_count++] = token;
             token = strtok_r(NULL, ",\n\r", &saveptr);
         }
 
-        if (token_count < 60) {
+        if (idx_iteration < 0 || idx_true_key < 0 || idx_prefix_alpha < 0 || idx_prefix_beta < 0 ||
+            idx_prefix_delta_abs_value < 0 || idx_prefix_delta_signed_num < 0 ||
+            idx_prefix_max_pair_count < 0 || idx_prefix_signed_min_tol < 0 ||
+            idx_prefix_signed_max_tol < 0 || idx_delta_time_sec < 0) {
+            fprintf(stderr, "Не удалось определить имена колонок в cache summary %s\n", summary_path);
+            free(entries);
+            fclose(f);
+            return -1;
+        }
+
+        if (token_count <= (size_t)idx_delta_time_sec) {
             fprintf(stderr, "Некорректная строка в cache summary %s\n", summary_path);
             free(entries);
             fclose(f);
             return -1;
         }
 
-        if (parse_u32(tokens[8], &entry.iteration) != 0 ||
-            parse_hex_u32_strict(tokens[9], &entry.key) != 0 ||
-            parse_hex_u16_strict(tokens[14], &entry.spectrum.alpha) != 0 ||
-            parse_hex_u16_strict(tokens[15], &entry.spectrum.beta) != 0 ||
-            parse_double_value(tokens[16], &delta_abs_value) != 0 ||
-            parse_i32(tokens[21], &entry.spectrum.signed_correlation) != 0 ||
-            parse_u32(tokens[24], &entry.spectrum.tol_pair_count) != 0 ||
-            parse_double_value(tokens[25], &tol_min_value) != 0 ||
-            parse_double_value(tokens[26], &tol_max_value) != 0 ||
-            parse_double_value(tokens[57], &entry.delta_time_sec) != 0) {
-            fprintf(stderr, "Не удалось распарсить cache summary %s на итерации %s\n", summary_path, tokens[8]);
+        if (parse_u32(tokens[idx_iteration], &entry.iteration) != 0 ||
+            parse_hex_u32_strict(tokens[idx_true_key], &entry.key) != 0 ||
+            parse_hex_u16_strict(tokens[idx_prefix_alpha], &entry.spectrum.alpha) != 0 ||
+            parse_hex_u16_strict(tokens[idx_prefix_beta], &entry.spectrum.beta) != 0 ||
+            parse_double_value(tokens[idx_prefix_delta_abs_value], &delta_abs_value) != 0 ||
+            parse_i32(tokens[idx_prefix_delta_signed_num], &entry.spectrum.signed_correlation) != 0 ||
+            parse_u32(tokens[idx_prefix_max_pair_count], &entry.spectrum.tol_pair_count) != 0 ||
+            parse_double_value(tokens[idx_prefix_signed_min_tol], &tol_min_value) != 0 ||
+            parse_double_value(tokens[idx_prefix_signed_max_tol], &tol_max_value) != 0 ||
+            parse_double_value(tokens[idx_delta_time_sec], &entry.delta_time_sec) != 0) {
+            fprintf(stderr, "Не удалось распарсить cache summary %s на итерации %s\n", summary_path, tokens[idx_iteration]);
             free(entries);
             fclose(f);
             return -1;
@@ -1571,7 +1690,7 @@ int main(int argc, char **argv) {
     if (!config.resume || start_iteration == 0) {
         fprintf(
             summary_csv,
-            "RUN_ID,SERIES_LABEL,SAMPLE_MODE,SAMPLE_FACTOR_M,SAMPLE_CAP,THREAD_COUNT,SEED,FULL_MATERIAL,ITERATION,TRUE_KEY,K4,K3,K2,K1,PREFIX_ALPHA,PREFIX_BETA,PREFIX_DELTA_ABS_VALUE,PREFIX_DELTA_ABS_NUMERATOR,PREFIX_DELTA_ABS_DENOMINATOR,PREFIX_DELTA_ABS_FRACTION,PREFIX_DELTA_SIGNED_VALUE,PREFIX_DELTA_SIGNED_NUMERATOR,PREFIX_DELTA_SIGNED_DENOMINATOR,PREFIX_DELTA_SIGNED_FRACTION,PREFIX_MAX_PAIR_COUNT_TOL_2_NEG_15,PREFIX_MAX_SIGNED_VALUE_MIN_TOL,PREFIX_MAX_SIGNED_VALUE_MAX_TOL,SAMPLE_COUNT,TRUE_KEY_LAST_ROUND_K1,TRUE_KEY_LAST_ROUND_K2,TRUE_DELTA_SIGNED_VALUE,TRUE_DELTA_SIGNED_NUMERATOR,TRUE_DELTA_SIGNED_DENOMINATOR,TRUE_DELTA_SIGNED_FRACTION,TRUE_RANK,FALSE_DELTA_SIGNED_MEAN_VALUE,FALSE_DELTA_SIGNED_MEAN_NUMERATOR,FALSE_DELTA_SIGNED_MEAN_DENOMINATOR,FALSE_DELTA_SIGNED_MEAN_FRACTION,BEST_GUESS_K1,BEST_GUESS_K2,BEST_DELTA_SIGNED_VALUE,BEST_DELTA_SIGNED_NUMERATOR,BEST_DELTA_SIGNED_DENOMINATOR,BEST_DELTA_SIGNED_FRACTION,BEST_TIE_COUNT,TRUE_IN_BEST_TIES,MAX_ABS_DELTA_SIGNED_MIN_VALUE,MAX_ABS_DELTA_SIGNED_MAX_VALUE,MAX_ABS_DELTA_SIGNED_MIN_NUMERATOR,MAX_ABS_DELTA_SIGNED_MAX_NUMERATOR,MAX_ABS_DELTA_SIGNED_MIN_FRACTION,MAX_ABS_DELTA_SIGNED_MAX_FRACTION,MIN_ABS_DELTA_VALUE,MIN_ABS_DELTA_NUMERATOR,MIN_ABS_DELTA_DENOMINATOR,MIN_ABS_DELTA_FRACTION,DELTA_TIME_SEC,RECOVERY_TIME_SEC,TOTAL_TIME_SEC\n"
+            "RUN_ID,SERIES_LABEL,SAMPLE_MODE,SAMPLE_FACTOR_M,SAMPLE_CAP,THREAD_COUNT,SEED,FULL_MATERIAL,ITERATION,TRUE_KEY,K4,K3,K2,K1,PREFIX_ALPHA,PREFIX_BETA,PREFIX_DELTA_ABS_VALUE,PREFIX_DELTA_ABS_NUMERATOR,PREFIX_DELTA_ABS_DENOMINATOR,PREFIX_DELTA_ABS_FRACTION,PREFIX_DELTA_SIGNED_VALUE,PREFIX_DELTA_SIGNED_NUMERATOR,PREFIX_DELTA_SIGNED_DENOMINATOR,PREFIX_DELTA_SIGNED_FRACTION,PREFIX_MAX_PAIR_COUNT_TOL_2_NEG_15,PREFIX_MAX_SIGNED_VALUE_MIN_TOL,PREFIX_MAX_SIGNED_VALUE_MAX_TOL,SAMPLE_COUNT,TRUE_KEY_LAST_ROUND_K1,TRUE_KEY_LAST_ROUND_K2,TRUE_DELTA_SIGNED_VALUE,TRUE_DELTA_SIGNED_NUMERATOR,TRUE_DELTA_SIGNED_DENOMINATOR,TRUE_DELTA_SIGNED_FRACTION,TRUE_DELTA_ABS_VALUE,TRUE_DELTA_ABS_NUMERATOR,TRUE_DELTA_ABS_DENOMINATOR,TRUE_DELTA_ABS_FRACTION,TRUE_RANK,FALSE_DELTA_SIGNED_MEAN_VALUE,FALSE_DELTA_SIGNED_MEAN_NUMERATOR,FALSE_DELTA_SIGNED_MEAN_DENOMINATOR,FALSE_DELTA_SIGNED_MEAN_FRACTION,FALSE_DELTA_ABS_MEAN_VALUE,FALSE_DELTA_ABS_MEAN_NUMERATOR,FALSE_DELTA_ABS_MEAN_DENOMINATOR,FALSE_DELTA_ABS_MEAN_FRACTION,FALSE_DELTA_ABS_MAX_VALUE,FALSE_DELTA_ABS_MAX_NUMERATOR,FALSE_DELTA_ABS_MAX_DENOMINATOR,FALSE_DELTA_ABS_MAX_FRACTION,FALSE_DELTA_ABS_MAX_KEY_COUNT_TOL_1E_7,BEST_GUESS_K1,BEST_GUESS_K2,BEST_DELTA_SIGNED_VALUE,BEST_DELTA_SIGNED_NUMERATOR,BEST_DELTA_SIGNED_DENOMINATOR,BEST_DELTA_SIGNED_FRACTION,TRUE_FALSE_ABS_RATIO_VALUE,TRUE_FALSE_ABS_DIFF_VALUE,TRUE_FALSE_ABS_DIFF_NUMERATOR,TRUE_FALSE_ABS_DIFF_DENOMINATOR,TRUE_FALSE_ABS_DIFF_FRACTION,BEST_TIE_COUNT,TRUE_IN_BEST_TIES,MAX_ABS_DELTA_SIGNED_MIN_VALUE,MAX_ABS_DELTA_SIGNED_MAX_VALUE,MAX_ABS_DELTA_SIGNED_MIN_NUMERATOR,MAX_ABS_DELTA_SIGNED_MAX_NUMERATOR,MAX_ABS_DELTA_SIGNED_MIN_FRACTION,MAX_ABS_DELTA_SIGNED_MAX_FRACTION,MIN_ABS_DELTA_VALUE,MIN_ABS_DELTA_NUMERATOR,MIN_ABS_DELTA_DENOMINATOR,MIN_ABS_DELTA_FRACTION,DELTA_TIME_SEC,RECOVERY_TIME_SEC,TOTAL_TIME_SEC\n"
         );
         fflush(summary_csv);
     }

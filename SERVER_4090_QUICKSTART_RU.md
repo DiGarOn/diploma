@@ -1,229 +1,88 @@
 # Быстрый запуск на RTX 4090
 
-Ниже минимальный и практичный сценарий, когда вы уже получили Linux-сервер с NVIDIA RTX 4090.
+Полный сценарий развертывания и запуска находится в файле [SERVER_DEPLOY_AND_RUN_M1_M10_FULL_RU.md](/Users/dmitriydmitriygarkin/Documents/HSE/diploma/SERVER_DEPLOY_AND_RUN_M1_M10_FULL_RU.md).
 
-## 1. Что должно быть на сервере
+Ниже только короткая памятка.
 
-Нужно:
+## 1. Где арендовать
 
-- NVIDIA driver
-- `nvidia-smi`
-- CUDA toolkit с `nvcc`
-- `git`
-- `python3`
-- `gcc`
-- `tmux`
+Используется [Vast.ai](https://vast.ai/). Для текущего прогона нужен Linux-сервер с `RTX 4090`, SSH-доступом и рабочей CUDA.
 
-Быстрая проверка:
+## 2. Базовые команды
+
+Подключение:
 
 ```bash
-nvidia-smi
-nvcc --version
-python3 --version
-gcc --version
-tmux -V
-git --version
+ssh -p <SSH_PORT> root@<PUBLIC_IP>
 ```
 
-## 2. Как скачать код
-
-Если будете работать по SSH-ключу:
+Клонирование:
 
 ```bash
 git clone git@github.com:DiGarOn/diploma.git
 cd diploma
-git rev-parse --short HEAD
 ```
 
-Если удобнее по HTTPS:
+Проверка среды:
 
 ```bash
-git clone https://github.com/DiGarOn/diploma.git
-cd diploma
-git rev-parse --short HEAD
-```
-
-Если потом нужно подтянуть обновления:
-
-```bash
-git pull
-```
-
-## 3. Первая проверка, что сервер годится
-
-Запустите встроенный preflight:
-
-```bash
+nvidia-smi
+nvcc --version
 bash tools/server_preflight.sh
 ```
 
-Что должно получиться:
-
-- `nvidia-smi` видит GPU
-- `nvcc --version` отрабатывает
-- в `results/server_preflight/build_backend.txt` есть строка `build_backend=cuda`
-- проходит `CPU smoke`
-- проходит `CUDA smoke`
-- проходит `Advisor suite smoke`
-
-Если хотите быстро посмотреть итог:
-
-```bash
-cat results/server_preflight/build_backend.txt
-tail -n 50 results/server_preflight/advisor_suite.log
-```
-
-## 4. Как сделать короткий тестовый запуск
-
-Сначала лучше запустить не полный прогон, а короткий:
+Короткий smoke-run:
 
 ```bash
 bash tools/server_run_4090.sh --count 10 --threads 16
 ```
 
-Это уже идет через `backend=cuda`, то есть именно в том режиме, который нужен для сервера с `RTX 4090`.
-
-После запуска найдите свежую папку:
-
-```bash
-ls -1dt results/key_recovery_suite/* | head
-```
-
-И посмотрите, что внутри:
-
-```bash
-RUN_DIR="$(ls -1dt results/key_recovery_suite/* | head -n 1)"
-echo "$RUN_DIR"
-cat "$RUN_DIR/suite_progress.txt"
-cat "$RUN_DIR/adaptive_m100/progress.txt"
-```
-
-## 5. Как запускать полный прогон
-
-Рекомендуемый способ: через `tmux`, чтобы процесс пережил разрыв SSH.
-
-Создать сессию:
+Полный запуск:
 
 ```bash
 tmux new -s diploma
-```
-
-Внутри `tmux` запустить:
-
-```bash
+cd /workspace/diploma
 bash tools/server_run_4090.sh --count 131072 --threads 16
 ```
 
-Отсоединиться от `tmux`:
+Отсоединение:
 
 ```bash
 Ctrl+b d
 ```
 
-Подключиться обратно позже:
+Возврат:
 
 ```bash
 tmux attach -t diploma
 ```
 
-## 6. Как контролировать прогресс
+## 3. Что теперь считается
 
-Узнать свежий run:
+Серии:
+
+- `adaptive_m1`
+- `adaptive_m10`
+- `full_material`
+
+Тяжелый prefix-расчет делается в `adaptive_m1`, дальше `adaptive_m10` и `full_material` используют `--reuse-prefix-summary`.
+
+## 4. Как смотреть прогресс
 
 ```bash
 RUN_DIR="$(ls -1dt results/key_recovery_suite/* | head -n 1)"
 echo "$RUN_DIR"
-```
-
-Краткий снимок прогресса:
-
-```bash
 bash tools/server_tail_progress.sh "$RUN_DIR"
-```
-
-Ручная проверка:
-
-```bash
-cat "$RUN_DIR/suite_progress.txt"
-cat "$RUN_DIR/adaptive_m100/progress.txt"
-tail -n 50 "$RUN_DIR/suite_progress.log"
-tail -n 50 "$RUN_DIR/adaptive_m100/progress.log"
-```
-
-Полезно смотреть именно `adaptive_m100`, потому что там считается тяжелая часть. Серии `adaptive_m10` и `full_material` используют повторное использование prefix summary и проходят заметно быстрее.
-
-## 7. Как понять, что CUDA реально используется
-
-Проверьте:
-
-```bash
-cat "$RUN_DIR/build_backend.txt"
-cat "$RUN_DIR/adaptive_m100/run_config.txt"
-```
-
-Там должно быть:
-
-- `build_backend=cuda`
-- `backend_mode=cuda` или `requested=cuda`
-- `active_backend=cuda`
-
-И можно параллельно глянуть загрузку GPU:
-
-```bash
+cat "$RUN_DIR/adaptive_m1/progress.txt"
+tail -n 50 "$RUN_DIR/adaptive_m1/progress.log"
 watch -n 2 nvidia-smi
 ```
 
-Если `watch` не установлен:
+## 5. Как продолжить после обрыва
 
 ```bash
-while true; do nvidia-smi; sleep 2; clear; done
+bash tools/server_run_4090.sh \
+  --count 131072 \
+  --threads 16 \
+  --suite-dir results/key_recovery_suite/<run_dir>
 ```
-
-## 8. Как продолжить после сбоя
-
-Если сервер перезагрузился, SSH оборвался или процесс прервался, не нужно начинать с нуля.
-
-Найдите каталог прогона:
-
-```bash
-RUN_DIR="results/key_recovery_suite/<имя_вашего_прогона>"
-```
-
-И перезапустите с ним:
-
-```bash
-bash tools/server_run_4090.sh --count 131072 --threads 16 --suite-dir "$RUN_DIR"
-```
-
-Скрипт продолжит работу через `--resume-dir`.
-
-## 9. Что отправлять мне при ошибке
-
-Если на сервере что-то не пошло, удобно сразу прислать:
-
-```bash
-RUN_DIR="$(ls -1dt results/key_recovery_suite/* | head -n 1)"
-echo "$RUN_DIR"
-cat "$RUN_DIR/build_backend.txt"
-tail -n 100 "$RUN_DIR/suite_progress.log"
-tail -n 100 "$RUN_DIR/adaptive_m100/progress.log"
-tail -n 100 results/server_preflight/advisor_suite.log
-```
-
-Если ошибка на этапе сборки, еще это:
-
-```bash
-bash tools/build_key_recovery_experiment.sh "$PWD" "$PWD/build"
-```
-
-## 10. Практический порядок действий
-
-На новом сервере делайте так:
-
-1. `git clone ... && cd diploma`
-2. `bash tools/server_preflight.sh`
-3. `bash tools/server_run_4090.sh --count 10 --threads 16`
-4. Проверить `suite_progress.txt` и `run_config.txt`
-5. Запустить полный прогон через `tmux`
-
-Если хотите, дальше я могу еще подготовить для вас отдельный блок команд именно под `Ubuntu 22.04/24.04`: что установить одной командой перед первым запуском. 

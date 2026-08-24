@@ -65,6 +65,7 @@ results/server_preflight/
 *.tmp
 *.bak
 *.old
+tmp/
 
 # macOS
 .DS_Store

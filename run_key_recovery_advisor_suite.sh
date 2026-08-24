@@ -13,8 +13,8 @@ SEED=1
 TOP=32
 THREADS=10
 SAMPLE_CAP=65536
+M1=1
 M10=10
-M100=100
 FULL_M=100
 BACKEND=auto
 CUDA_THRESHOLD_COUNT=128
@@ -34,8 +34,8 @@ seed=$SEED
 top=$TOP
 threads=$THREADS
 sample_cap=$SAMPLE_CAP
+m1=$M1
 m10=$M10
-m100=$M100
 full_m=$FULL_M
 suite_dir=$SUITE_DIR
 EOF
@@ -77,18 +77,18 @@ EOF
 }
 
 write_suite_progress_snapshot() {
-    local adaptive_m10_done adaptive_m100_done full_material_done total_done total_expected
+    local adaptive_m1_done adaptive_m10_done full_material_done total_done total_expected
+    adaptive_m1_done=$(count_completed_iterations "$SUITE_DIR/adaptive_m1/summary.csv")
     adaptive_m10_done=$(count_completed_iterations "$SUITE_DIR/adaptive_m10/summary.csv")
-    adaptive_m100_done=$(count_completed_iterations "$SUITE_DIR/adaptive_m100/summary.csv")
     full_material_done=$(count_completed_iterations "$SUITE_DIR/full_material/summary.csv")
-    total_done=$((adaptive_m10_done + adaptive_m100_done + full_material_done))
+    total_done=$((adaptive_m1_done + adaptive_m10_done + full_material_done))
     total_expected=$((COUNT * 3))
 
     cat > "$SUITE_DIR/suite_progress.txt" <<EOF
 updated_at=$(date '+%Y-%m-%d %H:%M:%S %Z')
 phase=$CURRENT_PHASE
+adaptive_m1_completed=$adaptive_m1_done/$COUNT
 adaptive_m10_completed=$adaptive_m10_done/$COUNT
-adaptive_m100_completed=$adaptive_m100_done/$COUNT
 full_material_completed=$full_material_done/$COUNT
 total_completed=$total_done/$total_expected
 log_file=$SUITE_DIR/background_run.log
@@ -149,12 +149,12 @@ while [ $# -gt 0 ]; do
             CUDA_THRESHOLD_COUNT="$2"
             shift 2
             ;;
-        --m10)
-            M10="$2"
+        --m1)
+            M1="$2"
             shift 2
             ;;
-        --m100)
-            M100="$2"
+        --m10)
+            M10="$2"
             shift 2
             ;;
         --full-m)
@@ -188,8 +188,8 @@ seed=$SEED
 top=$TOP
 threads=$THREADS
 sample_cap=$SAMPLE_CAP
+m1=$M1
 m10=$M10
-m100=$M100
 full_m=$FULL_M
 backend=$BACKEND
 cuda_threshold_count=$CUDA_THRESHOLD_COUNT
@@ -316,9 +316,9 @@ run_series() {
     log_suite_progress "series $label finished"
 }
 
-run_series "adaptive_m100" --m "$M100"
-REUSE_PREFIX_SUMMARY="$SUITE_DIR/adaptive_m100/summary.csv" run_series "adaptive_m10" --m "$M10"
-REUSE_PREFIX_SUMMARY="$SUITE_DIR/adaptive_m100/summary.csv" run_series "full_material" --full-material --m "$FULL_M"
+run_series "adaptive_m1" --m "$M1"
+REUSE_PREFIX_SUMMARY="$SUITE_DIR/adaptive_m1/summary.csv" run_series "adaptive_m10" --m "$M10"
+REUSE_PREFIX_SUMMARY="$SUITE_DIR/adaptive_m1/summary.csv" run_series "full_material" --full-material --m "$FULL_M"
 
 CURRENT_PHASE="finalizing"
 write_suite_progress_snapshot

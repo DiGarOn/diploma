@@ -4,19 +4,18 @@ from __future__ import annotations
 
 import argparse
 import csv
-import math
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
-from statistics import mean, median, pstdev
+from statistics import mean
 
 from csv_to_xlsx import convert_tree
 
 
 SERIES_LAYOUT = [
-    ("adaptive_m10", "01_adaptive_m10", "Серия material / 10 по delta^2"),
-    ("adaptive_m100", "02_adaptive_m100", "Серия material / 100 по delta^2"),
+    ("adaptive_m1", "01_adaptive_m1", "Серия material / 1 по delta^2"),
+    ("adaptive_m10", "02_adaptive_m10", "Серия material / 10 по delta^2"),
     ("full_material", "03_full_material", "Прогон по полному материалу"),
 ]
 
@@ -43,126 +42,56 @@ def write_csv(path: Path, rows: list[dict[str, str]], fieldnames: list[str]) -> 
         writer.writerows(rows)
 
 
-def percentile(sorted_values: list[float], p: float) -> float:
-    if not sorted_values:
-        return float("nan")
-    if len(sorted_values) == 1:
-        return sorted_values[0]
-    pos = (len(sorted_values) - 1) * p
-    lo = math.floor(pos)
-    hi = math.ceil(pos)
-    if lo == hi:
-        return sorted_values[lo]
-    frac = pos - lo
-    return sorted_values[lo] * (1.0 - frac) + sorted_values[hi] * frac
-
-
-def safe_float(text: str) -> float:
-    return float(text)
-
-
 def build_false_delta_distribution(summary_path: Path, series_label: str) -> dict[str, str]:
-    values: list[float] = []
+    false_signed_means: list[float] = []
+    false_abs_means: list[float] = []
+
     with summary_path.open(newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
-            values.append(float(row["FALSE_DELTA_SIGNED_MEAN_VALUE"]))
+            false_signed_means.append(float(row["FALSE_DELTA_SIGNED_MEAN_VALUE"]))
+            false_abs_means.append(float(row["FALSE_DELTA_ABS_MEAN_VALUE"]))
 
-    if not values:
+    if not false_signed_means:
         raise ValueError(f"No rows found in {summary_path}")
-
-    sorted_values = sorted(values)
-    n = len(values)
-    avg = mean(values)
-    sigma = pstdev(values)
-    positives = sum(1 for v in values if v > 0.0)
-    negatives = sum(1 for v in values if v < 0.0)
-    zeros = n - positives - negatives
-
-    if sigma == 0.0:
-        skewness = 0.0
-        excess_kurtosis = 0.0
-    else:
-        centered3 = mean((v - avg) ** 3 for v in values)
-        centered4 = mean((v - avg) ** 4 for v in values)
-        skewness = centered3 / (sigma ** 3)
-        excess_kurtosis = centered4 / (sigma ** 4) - 3.0
 
     return {
         "SERIES_LABEL": series_label,
-        "ITERATION_COUNT": str(n),
-        "FALSE_DELTA_MEAN": f"{avg:.12f}",
-        "FALSE_DELTA_STDDEV": f"{sigma:.12f}",
-        "FALSE_DELTA_MEDIAN": f"{median(values):.12f}",
-        "FALSE_DELTA_MIN": f"{sorted_values[0]:.12f}",
-        "FALSE_DELTA_MAX": f"{sorted_values[-1]:.12f}",
-        "FALSE_DELTA_ABS_MEAN": f"{mean(abs(v) for v in values):.12f}",
-        "FALSE_DELTA_P01": f"{percentile(sorted_values, 0.01):.12f}",
-        "FALSE_DELTA_P05": f"{percentile(sorted_values, 0.05):.12f}",
-        "FALSE_DELTA_P25": f"{percentile(sorted_values, 0.25):.12f}",
-        "FALSE_DELTA_P50": f"{percentile(sorted_values, 0.50):.12f}",
-        "FALSE_DELTA_P75": f"{percentile(sorted_values, 0.75):.12f}",
-        "FALSE_DELTA_P95": f"{percentile(sorted_values, 0.95):.12f}",
-        "FALSE_DELTA_P99": f"{percentile(sorted_values, 0.99):.12f}",
-        "POSITIVE_SHARE": f"{positives / n:.6f}",
-        "NEGATIVE_SHARE": f"{negatives / n:.6f}",
-        "ZERO_COUNT": str(zeros),
-        "SKEWNESS": f"{skewness:.6f}",
-        "EXCESS_KURTOSIS": f"{excess_kurtosis:.6f}",
+        "ITERATION_COUNT": str(len(false_signed_means)),
+        "FALSE_DELTA_SIGNED_MEAN": f"{mean(false_signed_means):.12f}",
+        "FALSE_DELTA_SIGNED_MIN": f"{min(false_signed_means):.12f}",
+        "FALSE_DELTA_SIGNED_MAX": f"{max(false_signed_means):.12f}",
+        "FALSE_DELTA_ABS_MEAN": f"{mean(false_abs_means):.12f}",
+        "FALSE_DELTA_ABS_MIN": f"{min(false_abs_means):.12f}",
+        "FALSE_DELTA_ABS_MAX": f"{max(false_abs_means):.12f}",
     }
 
 
 def build_readable_overview_row(aggregate_row: dict[str, str]) -> dict[str, str]:
     return {
-        "SERIES": aggregate_row["RUN_ID"],
+        "SERIES": aggregate_row["SERIES_LABEL"],
         "RUNS": aggregate_row["ITERATION_COUNT"],
         "TOP1": aggregate_row["TOP1_COUNT"],
         "TOP3": aggregate_row["TOP3_COUNT"],
-        "TOP5": aggregate_row["TOP5_COUNT"],
         "TOP32": aggregate_row["TOP32_COUNT"],
-        "TOP100": aggregate_row["TOP100_COUNT"],
         "TRUE_RANK_MEAN": aggregate_row["TRUE_RANK_MEAN"],
-        "TRUE_RANK_MEDIAN": aggregate_row["TRUE_RANK_MEDIAN"],
         "TRUE_RANK_MAX": aggregate_row["TRUE_RANK_MAX"],
         "SAMPLE_COUNT_MEAN": aggregate_row["SAMPLE_COUNT_MEAN"],
         "SAMPLE_COUNT_MIN": aggregate_row["SAMPLE_COUNT_MIN"],
         "SAMPLE_COUNT_MAX": aggregate_row["SAMPLE_COUNT_MAX"],
-        "PREFIX_DELTA_ABS_MIN": aggregate_row["PREFIX_DELTA_ABS_MIN_FRACTION"],
-        "PREFIX_DELTA_ABS_MAX": aggregate_row["PREFIX_DELTA_ABS_MAX_FRACTION"],
-        "MAX_PAIR_COUNT_MEAN": aggregate_row["PREFIX_MAX_PAIR_COUNT_MEAN"],
-        "MAX_PAIR_COUNT_MIN": aggregate_row["PREFIX_MAX_PAIR_COUNT_MIN"],
-        "MAX_PAIR_COUNT_MAX": aggregate_row["PREFIX_MAX_PAIR_COUNT_MAX"],
-        "MEAN_TRUE_DELTA_SIGNED": aggregate_row["MEAN_TRUE_DELTA_SIGNED_VALUE"],
-        "MEAN_FALSE_DELTA_SIGNED": aggregate_row["MEAN_FALSE_DELTA_SIGNED_VALUE"],
+        "MEAN_TRUE_DELTA_ABS": aggregate_row["MEAN_TRUE_DELTA_ABS_FRACTION"],
+        "MEAN_FALSE_DELTA_SIGNED": aggregate_row["MEAN_FALSE_DELTA_SIGNED_FRACTION"],
+        "MEAN_FALSE_DELTA_ABS": aggregate_row["MEAN_FALSE_DELTA_ABS_FRACTION"],
+        "MEAN_TRUE_FALSE_ABS_RATIO": aggregate_row["MEAN_TRUE_FALSE_ABS_RATIO_VALUE"],
+        "MEAN_TRUE_FALSE_ABS_DIFF": aggregate_row["MEAN_TRUE_FALSE_ABS_DIFF_FRACTION"],
+        "TRUE_DELTA_ABS_MAX": aggregate_row["TRUE_DELTA_ABS_MAX_FRACTION"],
+        "TRUE_DELTA_ABS_MAX_EXPERIMENT_COUNT_TOL_1E_7": aggregate_row["TRUE_DELTA_ABS_MAX_EXPERIMENT_COUNT_TOL_1E_7"],
+        "FALSE_DELTA_ABS_MAX": aggregate_row["FALSE_DELTA_ABS_MAX_FRACTION"],
+        "FALSE_DELTA_ABS_MAX_EXPERIMENT_COUNT_TOL_1E_7": aggregate_row["FALSE_DELTA_ABS_MAX_EXPERIMENT_COUNT_TOL_1E_7"],
+        "FALSE_DELTA_ABS_MAX_KEY_COUNT_MEAN_TOL_1E_7": aggregate_row["FALSE_DELTA_ABS_MAX_KEY_COUNT_MEAN_TOL_1E_7"],
+        "FALSE_DELTA_ABS_MAX_KEY_COUNT_MAX_TOL_1E_7": aggregate_row["FALSE_DELTA_ABS_MAX_KEY_COUNT_MAX_TOL_1E_7"],
         "TOTAL_TIME_MEAN_SEC": aggregate_row["TOTAL_TIME_MEAN_SEC"],
     }
-
-
-def hypothesis_text(dist_row: dict[str, str]) -> str:
-    mean_value = abs(float(dist_row["FALSE_DELTA_MEAN"]))
-    stddev = float(dist_row["FALSE_DELTA_STDDEV"])
-    positive_share = float(dist_row["POSITIVE_SHARE"])
-    skewness = float(dist_row["SKEWNESS"])
-
-    parts = []
-    if stddev > 0.0 and mean_value <= 0.1 * stddev:
-        parts.append("центр распределения близок к нулю")
-    else:
-        parts.append("центр распределения заметно смещен относительно нуля")
-
-    if abs(positive_share - 0.5) <= 0.02:
-        parts.append("доли положительных и отрицательных значений почти симметричны")
-    else:
-        parts.append("наблюдается заметная асимметрия по знаку")
-
-    if abs(skewness) <= 0.2:
-        parts.append("асимметрия мала")
-    elif skewness > 0:
-        parts.append("есть правосторонняя асимметрия")
-    else:
-        parts.append("есть левосторонняя асимметрия")
-
-    return "; ".join(parts)
 
 
 def render_pdf(markdown_path: Path, pdf_path: Path) -> str | None:
@@ -239,14 +168,12 @@ def write_package_readme(package_dir: Path) -> None:
                 "1. overview/",
                 "   - 00_series_overview_readable.csv/.xlsx: краткая сводка по сериям.",
                 "   - 01_series_overview.csv/.xlsx: полная машинная сводка по сериям.",
-                "   - 02_false_delta_distribution.csv/.xlsx: статистика распределения",
-                "     средних signed delta по ложным подключам.",
+                "   - 02_false_delta_distribution.csv/.xlsx: компактная сводка по средним delta ложных ключей.",
                 "   - 03_th1_h2_t_verification.csv/.xlsx: проверка TH1H2T.",
                 "   - 04_report.md и 05_report.pdf: отчет на русском языке.",
-                "2. series_tables/: полные таблицы и конфигурации по сериям.",
+                "2. series_tables/: полные таблицы, агрегаты и конфигурации по сериям.",
                 "",
                 "top_candidates_*.csv в пакет не включены, чтобы он оставался компактным.",
-                "Их можно приложить отдельно при необходимости.",
             ]
         )
         + "\n",
@@ -258,14 +185,15 @@ def write_assignment_mapping(package_dir: Path) -> None:
     (package_dir / "00_assignment_mapping.md").write_text(
         "\n".join(
             [
-                "# Соответствие задачам и материалам",
+                "# Соответствие материалам",
                 "",
                 "- Полные данные по прогонам находятся в `series_tables/*/01_summary.csv` и `.xlsx`.",
-                "- Конфигурации запусков находятся в `series_tables/*/03_run_config.txt`.",
+                "- Агрегаты по сериям находятся в `series_tables/*/02_aggregate_report.csv` и `03_aggregate_report.md`.",
+                "- Конфигурации запусков находятся в `series_tables/*/04_run_config.txt`.",
                 "- Сводка по сериям вынесена в `overview/00_series_overview_readable.csv` и `overview/01_series_overview.csv`.",
+                "- Компактная сводка по средним delta ложных ключей находится в `overview/02_false_delta_distribution.csv`.",
                 "- Проверка корректности TH1H2T находится в `overview/03_th1_h2_t_verification.csv`.",
-                "- Статистика по распределению средних signed delta ложных подключей находится в `overview/02_false_delta_distribution.csv`.",
-                "- Основной отчет на русском языке находится в `overview/04_report.md` и `overview/05_report.pdf`.",
+                "- Основной отчет находится в `overview/04_report.md` и `overview/05_report.pdf`.",
             ]
         )
         + "\n",
@@ -279,7 +207,7 @@ def build_report_markdown(
     distribution_rows: list[dict[str, str]],
     verification_row: dict[str, str] | None,
 ) -> str:
-    agg_by_series = {row["RUN_ID"]: row for row in aggregate_rows}
+    agg_by_series = {row["SERIES_LABEL"]: row for row in aggregate_rows}
     dist_by_series = {row["SERIES_LABEL"]: row for row in distribution_rows}
     lines: list[str] = []
 
@@ -291,8 +219,8 @@ def build_report_markdown(
     lines.append("")
     lines.append("Были подготовлены три серии вычислений:")
     lines.append("")
+    lines.append("- `adaptive_m1`: режим material / 1 по `delta^2`.")
     lines.append("- `adaptive_m10`: режим material / 10 по `delta^2`.")
-    lines.append("- `adaptive_m100`: режим material / 100 по `delta^2`.")
     lines.append("- `full_material`: прогон по полному материалу.")
     lines.append("")
 
@@ -307,53 +235,83 @@ def build_report_markdown(
 
     lines.append("## 3. Основные результаты по сериям")
     lines.append("")
-    for series_name, _, _ in SERIES_LAYOUT:
+    for series_name, _, title in SERIES_LAYOUT:
         aggregate_row = agg_by_series.get(series_name)
         dist_row = dist_by_series.get(series_name)
         if not aggregate_row:
             continue
-        lines.append(f"### {series_name}")
+        lines.append(f"### {title}")
         lines.append("")
         lines.append(f"- число прогонов: `{aggregate_row['ITERATION_COUNT']}`")
         lines.append(f"- `top1`: `{aggregate_row['TOP1_COUNT']} / {aggregate_row['ITERATION_COUNT']}`")
         lines.append(f"- `top3`: `{aggregate_row['TOP3_COUNT']} / {aggregate_row['ITERATION_COUNT']}`")
-        lines.append(f"- `top5`: `{aggregate_row['TOP5_COUNT']} / {aggregate_row['ITERATION_COUNT']}`")
         lines.append(f"- `top32`: `{aggregate_row['TOP32_COUNT']} / {aggregate_row['ITERATION_COUNT']}`")
-        lines.append(f"- `top100`: `{aggregate_row['TOP100_COUNT']} / {aggregate_row['ITERATION_COUNT']}`")
         lines.append(f"- средний ранг истинного ключа: `{aggregate_row['TRUE_RANK_MEAN']}`")
-        lines.append(f"- медианный ранг истинного ключа: `{aggregate_row['TRUE_RANK_MEDIAN']}`")
         lines.append(f"- максимальный ранг истинного ключа: `{aggregate_row['TRUE_RANK_MAX']}`")
-        lines.append(f"- среднее число максимизирующих пар `alpha/beta`: `{aggregate_row['PREFIX_MAX_PAIR_COUNT_MEAN']}`")
-        lines.append(f"- минимум и максимум `|prefix delta|`: `{aggregate_row['PREFIX_DELTA_ABS_MIN_FRACTION']}` и `{aggregate_row['PREFIX_DELTA_ABS_MAX_FRACTION']}`")
-        lines.append(f"- средняя signed delta на истинном ключе: `{aggregate_row['MEAN_TRUE_DELTA_SIGNED_VALUE']}`")
-        lines.append(f"- средняя signed delta по ложным подключам: `{aggregate_row['MEAN_FALSE_DELTA_SIGNED_VALUE']}`")
+        lines.append(
+            f"- среднее `|delta_true|`: `{aggregate_row['MEAN_TRUE_DELTA_ABS_VALUE']}` "
+            f"(`{aggregate_row['MEAN_TRUE_DELTA_ABS_FRACTION']}`)"
+        )
+        lines.append(
+            f"- среднее signed-значение по ложным ключам: `{aggregate_row['MEAN_FALSE_DELTA_SIGNED_VALUE']}` "
+            f"(`{aggregate_row['MEAN_FALSE_DELTA_SIGNED_FRACTION']}`)"
+        )
+        lines.append(
+            f"- среднее `|delta_false|` по ложным ключам: `{aggregate_row['MEAN_FALSE_DELTA_ABS_VALUE']}` "
+            f"(`{aggregate_row['MEAN_FALSE_DELTA_ABS_FRACTION']}`)"
+        )
+        lines.append(f"- среднее отношение `|delta_true| / mean(|delta_false|)`: `{aggregate_row['MEAN_TRUE_FALSE_ABS_RATIO_VALUE']}`")
+        lines.append(
+            f"- средняя разность `|delta_true| - mean(|delta_false|)`: `{aggregate_row['MEAN_TRUE_FALSE_ABS_DIFF_VALUE']}` "
+            f"(`{aggregate_row['MEAN_TRUE_FALSE_ABS_DIFF_FRACTION']}`)"
+        )
+        lines.append(
+            f"- максимальное `|delta_true|` по серии: `{aggregate_row['TRUE_DELTA_ABS_MAX_VALUE']}` "
+            f"(`{aggregate_row['TRUE_DELTA_ABS_MAX_FRACTION']}`)"
+        )
+        lines.append(
+            f"- число экспериментов, где максимум `|delta_true|` достигался с точностью до 7 знака: "
+            f"`{aggregate_row['TRUE_DELTA_ABS_MAX_EXPERIMENT_COUNT_TOL_1E_7']}`"
+        )
+        lines.append(
+            f"- максимальное `max |delta_false|` по серии: `{aggregate_row['FALSE_DELTA_ABS_MAX_VALUE']}` "
+            f"(`{aggregate_row['FALSE_DELTA_ABS_MAX_FRACTION']}`)"
+        )
+        lines.append(
+            f"- число экспериментов, где максимум `max |delta_false|` достигался с точностью до 7 знака: "
+            f"`{aggregate_row['FALSE_DELTA_ABS_MAX_EXPERIMENT_COUNT_TOL_1E_7']}`"
+        )
+        lines.append(
+            f"- среднее число ложных ключей, на которых достигался `max |delta_false|` "
+            f"(с точностью до 7 знака): `{aggregate_row['FALSE_DELTA_ABS_MAX_KEY_COUNT_MEAN_TOL_1E_7']}`"
+        )
+        lines.append(
+            f"- максимальное число ложных ключей, на которых достигался `max |delta_false|` "
+            f"(с точностью до 7 знака): `{aggregate_row['FALSE_DELTA_ABS_MAX_KEY_COUNT_MAX_TOL_1E_7']}`"
+        )
         lines.append(f"- среднее время одного прогона, сек: `{aggregate_row['TOTAL_TIME_MEAN_SEC']}`")
         if dist_row:
-            lines.append(f"- stddev средних ложных delta: `{dist_row['FALSE_DELTA_STDDEV']}`")
-            lines.append(f"- медиана средних ложных delta: `{dist_row['FALSE_DELTA_MEDIAN']}`")
-            lines.append(f"- 1% / 99% квантили: `{dist_row['FALSE_DELTA_P01']}` / `{dist_row['FALSE_DELTA_P99']}`")
-            lines.append(f"- доля положительных значений: `{dist_row['POSITIVE_SHARE']}`")
-            lines.append(f"- гипотеза по распределению: {hypothesis_text(dist_row)}.")
+            lines.append(
+                f"- по средним ложным delta: signed mean/min/max = "
+                f"`{dist_row['FALSE_DELTA_SIGNED_MEAN']}` / "
+                f"`{dist_row['FALSE_DELTA_SIGNED_MIN']}` / "
+                f"`{dist_row['FALSE_DELTA_SIGNED_MAX']}`"
+            )
+            lines.append(
+                f"- по средним `|delta_false|`: mean/min/max = "
+                f"`{dist_row['FALSE_DELTA_ABS_MEAN']}` / "
+                f"`{dist_row['FALSE_DELTA_ABS_MIN']}` / "
+                f"`{dist_row['FALSE_DELTA_ABS_MAX']}`"
+            )
         lines.append("")
 
-    if distribution_rows:
-        lines.append("## 4. Наблюдения по распределению средних ложных delta")
-        lines.append("")
-        lines.append("По файлу `false_delta_distribution.csv` можно проверять гипотезы о распределении.")
-        lines.append("На что имеет смысл смотреть в первую очередь:")
-        lines.append("")
-        lines.append("- насколько среднее близко к нулю относительно стандартного отклонения;")
-        lines.append("- насколько близки доли положительных и отрицательных значений;")
-        lines.append("- как меняется `stddev` при переходе от `adaptive_m10` к `adaptive_m100` и `full_material`;")
-        lines.append("- есть ли выраженная асимметрия по `skewness` и тяжелые хвосты по `excess kurtosis`.")
-        lines.append("")
-
-    lines.append("## 5. Где лежат материалы для отправки")
+    lines.append("## 4. Где лежат материалы для отправки")
     lines.append("")
     lines.append("- полные таблицы по сериям: `series_tables/*/01_summary.csv` и `.xlsx`;")
-    lines.append("- конфигурации запусков: `series_tables/*/03_run_config.txt`;")
+    lines.append("- агрегаты по сериям: `series_tables/*/02_aggregate_report.csv`;")
+    lines.append("- конфигурации запусков: `series_tables/*/04_run_config.txt`;")
     lines.append("- сводка по сериям: `overview/00_series_overview_readable.csv` и `overview/01_series_overview.csv`;")
-    lines.append("- распределение ложных delta: `overview/02_false_delta_distribution.csv`;")
+    lines.append("- компактная сводка по средним ложным delta: `overview/02_false_delta_distribution.csv`;")
     lines.append("- проверка TH1H2T: `overview/03_th1_h2_t_verification.csv`;")
     lines.append("- PDF-версия отчета: `overview/05_report.pdf`.")
     lines.append("")
@@ -363,9 +321,6 @@ def build_report_markdown(
 
 def build_package(
     suite_dir: Path,
-    overview_rows: list[dict[str, str]],
-    readable_rows: list[dict[str, str]],
-    distribution_rows: list[dict[str, str]],
     report_md_path: Path,
     report_pdf_path: Path | None,
 ) -> Path:
@@ -402,7 +357,8 @@ def build_package(
         dst_dir.mkdir(parents=True, exist_ok=True)
         copy_if_exists(src_dir / "summary.csv", dst_dir / "01_summary.csv")
         copy_if_exists(src_dir / "aggregate_report.csv", dst_dir / "02_aggregate_report.csv")
-        copy_if_exists(src_dir / "run_config.txt", dst_dir / "03_run_config.txt")
+        copy_if_exists(src_dir / "aggregate_report.md", dst_dir / "03_aggregate_report.md")
+        copy_if_exists(src_dir / "run_config.txt", dst_dir / "04_run_config.txt")
 
     convert_tree(package_dir)
     return package_dir
@@ -454,9 +410,6 @@ def main() -> int:
 
     package_dir = build_package(
         suite_dir=suite_dir,
-        overview_rows=aggregate_rows,
-        readable_rows=readable_rows,
-        distribution_rows=distribution_rows,
         report_md_path=report_md_path,
         report_pdf_path=report_pdf_path if report_pdf_path.exists() else None,
     )
