@@ -213,24 +213,24 @@ def build_report_markdown(
 
     lines.append("# Отчет по большому прогону key recovery")
     lines.append("")
-    lines.append(f"Каталог прогона: `{suite_dir.name}`.")
+    lines.append(f"Каталог прогона: {suite_dir.name}.")
     lines.append("")
     lines.append("## 1. Что запускалось")
     lines.append("")
     lines.append("Были подготовлены три серии вычислений:")
     lines.append("")
-    lines.append("- `adaptive_m1`: режим material / 1 по `delta^2`.")
-    lines.append("- `adaptive_m10`: режим material / 10 по `delta^2`.")
-    lines.append("- `full_material`: прогон по полному материалу.")
+    lines.append("- adaptive_m1: режим material / 1 по delta^2.")
+    lines.append("- adaptive_m10: режим material / 10 по delta^2.")
+    lines.append("- full_material: прогон по полному материалу.")
     lines.append("")
 
     if verification_row:
         lines.append("## 2. Проверка TH1H2T")
         lines.append("")
-        lines.append(f"- ключ: `{verification_row['KEY']}`")
-        lines.append(f"- проверено открытых текстов: `{verification_row['TOTAL_PLAINTEXTS']}`")
-        lines.append(f"- число несовпадений: `{verification_row['MISMATCH_COUNT']}`")
-        lines.append(f"- статус: `{verification_row['STATUS']}`")
+        lines.append(f"- ключ: {verification_row['KEY']}")
+        lines.append(f"- проверено открытых текстов: {verification_row['TOTAL_PLAINTEXTS']}")
+        lines.append(f"- число несовпадений: {verification_row['MISMATCH_COUNT']}")
+        lines.append(f"- статус: {verification_row['STATUS']}")
         lines.append("")
 
     lines.append("## 3. Основные результаты по сериям")
@@ -242,78 +242,48 @@ def build_report_markdown(
             continue
         lines.append(f"### {title}")
         lines.append("")
-        lines.append(f"- число прогонов: `{aggregate_row['ITERATION_COUNT']}`")
-        lines.append(f"- `top1`: `{aggregate_row['TOP1_COUNT']} / {aggregate_row['ITERATION_COUNT']}`")
-        lines.append(f"- `top3`: `{aggregate_row['TOP3_COUNT']} / {aggregate_row['ITERATION_COUNT']}`")
-        lines.append(f"- `top32`: `{aggregate_row['TOP32_COUNT']} / {aggregate_row['ITERATION_COUNT']}`")
-        lines.append(f"- средний ранг истинного ключа: `{aggregate_row['TRUE_RANK_MEAN']}`")
-        lines.append(f"- максимальный ранг истинного ключа: `{aggregate_row['TRUE_RANK_MAX']}`")
-        lines.append(
-            f"- среднее `|delta_true|`: `{aggregate_row['MEAN_TRUE_DELTA_ABS_VALUE']}` "
-            f"(`{aggregate_row['MEAN_TRUE_DELTA_ABS_FRACTION']}`)"
-        )
-        lines.append(
-            f"- среднее signed-значение по ложным ключам: `{aggregate_row['MEAN_FALSE_DELTA_SIGNED_VALUE']}` "
-            f"(`{aggregate_row['MEAN_FALSE_DELTA_SIGNED_FRACTION']}`)"
-        )
-        lines.append(
-            f"- среднее `|delta_false|` по ложным ключам: `{aggregate_row['MEAN_FALSE_DELTA_ABS_VALUE']}` "
-            f"(`{aggregate_row['MEAN_FALSE_DELTA_ABS_FRACTION']}`)"
-        )
-        lines.append(f"- среднее отношение `|delta_true| / mean(|delta_false|)`: `{aggregate_row['MEAN_TRUE_FALSE_ABS_RATIO_VALUE']}`")
-        lines.append(
-            f"- средняя разность `|delta_true| - mean(|delta_false|)`: `{aggregate_row['MEAN_TRUE_FALSE_ABS_DIFF_VALUE']}` "
-            f"(`{aggregate_row['MEAN_TRUE_FALSE_ABS_DIFF_FRACTION']}`)"
-        )
-        lines.append(
-            f"- максимальное `|delta_true|` по серии: `{aggregate_row['TRUE_DELTA_ABS_MAX_VALUE']}` "
-            f"(`{aggregate_row['TRUE_DELTA_ABS_MAX_FRACTION']}`)"
-        )
-        lines.append(
-            f"- число экспериментов, где максимум `|delta_true|` достигался с точностью до 7 знака: "
-            f"`{aggregate_row['TRUE_DELTA_ABS_MAX_EXPERIMENT_COUNT_TOL_1E_7']}`"
-        )
-        lines.append(
-            f"- максимальное `max |delta_false|` по серии: `{aggregate_row['FALSE_DELTA_ABS_MAX_VALUE']}` "
-            f"(`{aggregate_row['FALSE_DELTA_ABS_MAX_FRACTION']}`)"
-        )
-        lines.append(
-            f"- число экспериментов, где максимум `max |delta_false|` достигался с точностью до 7 знака: "
-            f"`{aggregate_row['FALSE_DELTA_ABS_MAX_EXPERIMENT_COUNT_TOL_1E_7']}`"
-        )
-        lines.append(
-            f"- среднее число ложных ключей, на которых достигался `max |delta_false|` "
-            f"(с точностью до 7 знака): `{aggregate_row['FALSE_DELTA_ABS_MAX_KEY_COUNT_MEAN_TOL_1E_7']}`"
-        )
-        lines.append(
-            f"- максимальное число ложных ключей, на которых достигался `max |delta_false|` "
-            f"(с точностью до 7 знака): `{aggregate_row['FALSE_DELTA_ABS_MAX_KEY_COUNT_MAX_TOL_1E_7']}`"
-        )
-        lines.append(f"- среднее время одного прогона, сек: `{aggregate_row['TOTAL_TIME_MEAN_SEC']}`")
+        lines.append(f"- число прогонов: {aggregate_row['ITERATION_COUNT']}")
+        lines.append(f"- top1: {aggregate_row['TOP1_COUNT']} / {aggregate_row['ITERATION_COUNT']}")
+        lines.append(f"- top3: {aggregate_row['TOP3_COUNT']} / {aggregate_row['ITERATION_COUNT']}")
+        lines.append(f"- top32: {aggregate_row['TOP32_COUNT']} / {aggregate_row['ITERATION_COUNT']}")
+        lines.append(f"- средний ранг истинного ключа: {aggregate_row['TRUE_RANK_MEAN']}")
+        lines.append(f"- максимальный ранг истинного ключа: {aggregate_row['TRUE_RANK_MAX']}")
+        lines.append(f"- среднее |delta_true|: {aggregate_row['MEAN_TRUE_DELTA_ABS_VALUE']}")
+        lines.append(f"- среднее signed-значение по ложным ключам: {aggregate_row['MEAN_FALSE_DELTA_SIGNED_VALUE']}")
+        lines.append(f"- среднее |delta_false| по ложным ключам: {aggregate_row['MEAN_FALSE_DELTA_ABS_VALUE']}")
+        lines.append(f"- среднее отношение |delta_true| / mean(|delta_false|): {aggregate_row['MEAN_TRUE_FALSE_ABS_RATIO_VALUE']}")
+        lines.append(f"- средняя разность |delta_true| - mean(|delta_false|): {aggregate_row['MEAN_TRUE_FALSE_ABS_DIFF_VALUE']}")
+        lines.append(f"- максимальное |delta_true| по серии: {aggregate_row['TRUE_DELTA_ABS_MAX_VALUE']}")
+        lines.append(f"- число экспериментов, где максимум |delta_true| достигался с точностью до 7 знака: {aggregate_row['TRUE_DELTA_ABS_MAX_EXPERIMENT_COUNT_TOL_1E_7']}")
+        lines.append(f"- максимальное max |delta_false| по серии: {aggregate_row['FALSE_DELTA_ABS_MAX_VALUE']}")
+        lines.append(f"- число экспериментов, где максимум max |delta_false| достигался с точностью до 7 знака: {aggregate_row['FALSE_DELTA_ABS_MAX_EXPERIMENT_COUNT_TOL_1E_7']}")
+        lines.append(f"- среднее число ложных ключей, на которых достигался max |delta_false| с точностью до 7 знака: {aggregate_row['FALSE_DELTA_ABS_MAX_KEY_COUNT_MEAN_TOL_1E_7']}")
+        lines.append(f"- максимальное число ложных ключей, на которых достигался max |delta_false| с точностью до 7 знака: {aggregate_row['FALSE_DELTA_ABS_MAX_KEY_COUNT_MAX_TOL_1E_7']}")
+        lines.append(f"- среднее время одного прогона, сек: {aggregate_row['TOTAL_TIME_MEAN_SEC']}")
         if dist_row:
             lines.append(
                 f"- по средним ложным delta: signed mean/min/max = "
-                f"`{dist_row['FALSE_DELTA_SIGNED_MEAN']}` / "
-                f"`{dist_row['FALSE_DELTA_SIGNED_MIN']}` / "
-                f"`{dist_row['FALSE_DELTA_SIGNED_MAX']}`"
+                f"{dist_row['FALSE_DELTA_SIGNED_MEAN']} / "
+                f"{dist_row['FALSE_DELTA_SIGNED_MIN']} / "
+                f"{dist_row['FALSE_DELTA_SIGNED_MAX']}"
             )
             lines.append(
-                f"- по средним `|delta_false|`: mean/min/max = "
-                f"`{dist_row['FALSE_DELTA_ABS_MEAN']}` / "
-                f"`{dist_row['FALSE_DELTA_ABS_MIN']}` / "
-                f"`{dist_row['FALSE_DELTA_ABS_MAX']}`"
+                f"- по средним |delta_false|: mean/min/max = "
+                f"{dist_row['FALSE_DELTA_ABS_MEAN']} / "
+                f"{dist_row['FALSE_DELTA_ABS_MIN']} / "
+                f"{dist_row['FALSE_DELTA_ABS_MAX']}"
             )
         lines.append("")
 
     lines.append("## 4. Где лежат материалы для отправки")
     lines.append("")
-    lines.append("- полные таблицы по сериям: `series_tables/*/01_summary.csv` и `.xlsx`;")
-    lines.append("- агрегаты по сериям: `series_tables/*/02_aggregate_report.csv`;")
-    lines.append("- конфигурации запусков: `series_tables/*/04_run_config.txt`;")
-    lines.append("- сводка по сериям: `overview/00_series_overview_readable.csv` и `overview/01_series_overview.csv`;")
-    lines.append("- компактная сводка по средним ложным delta: `overview/02_false_delta_distribution.csv`;")
-    lines.append("- проверка TH1H2T: `overview/03_th1_h2_t_verification.csv`;")
-    lines.append("- PDF-версия отчета: `overview/05_report.pdf`.")
+    lines.append("- полные таблицы по сериям: series_tables/01_adaptive_m1/01_summary.csv, series_tables/02_adaptive_m10/01_summary.csv, series_tables/03_full_material/01_summary.csv и соответствующие .xlsx;")
+    lines.append("- агрегаты по сериям: series_tables/01_adaptive_m1/02_aggregate_report.csv, series_tables/02_adaptive_m10/02_aggregate_report.csv, series_tables/03_full_material/02_aggregate_report.csv;")
+    lines.append("- конфигурации запусков: series_tables/01_adaptive_m1/04_run_config.txt, series_tables/02_adaptive_m10/04_run_config.txt, series_tables/03_full_material/04_run_config.txt;")
+    lines.append("- сводка по сериям: overview/00_series_overview_readable.csv и overview/01_series_overview.csv;")
+    lines.append("- компактная сводка по средним ложным delta: overview/02_false_delta_distribution.csv;")
+    lines.append("- проверка TH1H2T: overview/03_th1_h2_t_verification.csv;")
+    lines.append("- PDF-версия отчета: overview/05_report.pdf.")
     lines.append("")
 
     return "\n".join(lines) + "\n"

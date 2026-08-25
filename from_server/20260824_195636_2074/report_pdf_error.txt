@@ -1,0 +1,5 @@
+Error producing PDF.
+! Missing number, treated as zero.
+<to be read again> 
+                   *
+l.234   с
