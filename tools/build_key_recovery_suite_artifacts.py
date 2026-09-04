@@ -15,8 +15,9 @@ from csv_to_xlsx import convert_tree
 
 SERIES_LAYOUT = [
     ("adaptive_m1", "01_adaptive_m1", "Серия material / 1 по delta^2"),
-    ("adaptive_m10", "02_adaptive_m10", "Серия material / 10 по delta^2"),
-    ("full_material", "03_full_material", "Прогон по полному материалу"),
+    ("adaptive_m5", "02_adaptive_m5", "Серия material / 5 по delta^2"),
+    ("adaptive_m10", "03_adaptive_m10", "Серия material / 10 по delta^2"),
+    ("full_material", "04_full_material", "Прогон по полному материалу"),
 ]
 
 
@@ -217,9 +218,10 @@ def build_report_markdown(
     lines.append("")
     lines.append("## 1. Что запускалось")
     lines.append("")
-    lines.append("Были подготовлены три серии вычислений:")
+    lines.append("Были подготовлены четыре серии вычислений:")
     lines.append("")
     lines.append("- adaptive_m1: режим material / 1 по delta^2.")
+    lines.append("- adaptive_m5: режим material / 5 по delta^2.")
     lines.append("- adaptive_m10: режим material / 10 по delta^2.")
     lines.append("- full_material: прогон по полному материалу.")
     lines.append("")
@@ -277,9 +279,9 @@ def build_report_markdown(
 
     lines.append("## 4. Где лежат материалы для отправки")
     lines.append("")
-    lines.append("- полные таблицы по сериям: series_tables/01_adaptive_m1/01_summary.csv, series_tables/02_adaptive_m10/01_summary.csv, series_tables/03_full_material/01_summary.csv и соответствующие .xlsx;")
-    lines.append("- агрегаты по сериям: series_tables/01_adaptive_m1/02_aggregate_report.csv, series_tables/02_adaptive_m10/02_aggregate_report.csv, series_tables/03_full_material/02_aggregate_report.csv;")
-    lines.append("- конфигурации запусков: series_tables/01_adaptive_m1/04_run_config.txt, series_tables/02_adaptive_m10/04_run_config.txt, series_tables/03_full_material/04_run_config.txt;")
+    lines.append("- полные таблицы по сериям: series_tables/*/01_summary.csv и соответствующие .xlsx;")
+    lines.append("- агрегаты по сериям: series_tables/*/02_aggregate_report.csv;")
+    lines.append("- конфигурации запусков: series_tables/*/04_run_config.txt;")
     lines.append("- сводка по сериям: overview/00_series_overview_readable.csv и overview/01_series_overview.csv;")
     lines.append("- компактная сводка по средним ложным delta: overview/02_false_delta_distribution.csv;")
     lines.append("- проверка TH1H2T: overview/03_th1_h2_t_verification.csv;")

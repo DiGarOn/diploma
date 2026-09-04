@@ -14,6 +14,7 @@ TOP=32
 THREADS=10
 SAMPLE_CAP=65536
 M1=1
+M5=5
 M10=10
 FULL_M=100
 BACKEND=auto
@@ -47,6 +48,10 @@ while [ $# -gt 0 ]; do
             ;;
         --m10)
             M10="$2"
+            shift 2
+            ;;
+        --m5)
+            M5="$2"
             shift 2
             ;;
         --full-m)
@@ -121,6 +126,7 @@ run_series() {
 }
 
 run_series "adaptive_m1" --m "$M1"
+REUSE_PREFIX_SUMMARY="$SUITE_DIR/adaptive_m1/summary.csv" run_series "adaptive_m5" --m "$M5"
 REUSE_PREFIX_SUMMARY="$SUITE_DIR/adaptive_m1/summary.csv" run_series "adaptive_m10" --m "$M10"
 REUSE_PREFIX_SUMMARY="$SUITE_DIR/adaptive_m1/summary.csv" run_series "full_material" --full-material --m "$FULL_M"
 
@@ -131,6 +137,7 @@ from pathlib import Path
 suite_dir = Path(r"$SUITE_DIR")
 aggregate_paths = [
     suite_dir / "adaptive_m1" / "aggregate_report.csv",
+    suite_dir / "adaptive_m5" / "aggregate_report.csv",
     suite_dir / "adaptive_m10" / "aggregate_report.csv",
     suite_dir / "full_material" / "aggregate_report.csv",
 ]
@@ -154,7 +161,7 @@ threads=$THREADS
 sample_cap=$SAMPLE_CAP
 backend=$BACKEND
 cuda_threshold_count=$CUDA_THRESHOLD_COUNT
-series=adaptive_m1,adaptive_m10,full_material
+series=adaptive_m1,adaptive_m5,adaptive_m10,full_material
 verification=th1h2t_verification.csv
 overview=series_overview.csv
 EOF

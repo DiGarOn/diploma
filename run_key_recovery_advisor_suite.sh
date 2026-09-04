@@ -8,12 +8,13 @@ RESULTS_ROOT="$ROOT_DIR/results/key_recovery_suite"
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)_$$"
 REFERENCE_OVERVIEW="$ROOT_DIR/results/key_recovery_suite/20260523_124949_54914/series_overview.csv"
 
-COUNT=131072
-SEED=1
+COUNT=524288
+SEED=2
 TOP=32
 THREADS=10
 SAMPLE_CAP=65536
 M1=1
+M5=5
 M10=10
 FULL_M=100
 BACKEND=auto
@@ -35,6 +36,7 @@ top=$TOP
 threads=$THREADS
 sample_cap=$SAMPLE_CAP
 m1=$M1
+m5=$M5
 m10=$M10
 full_m=$FULL_M
 suite_dir=$SUITE_DIR
@@ -77,17 +79,19 @@ EOF
 }
 
 write_suite_progress_snapshot() {
-    local adaptive_m1_done adaptive_m10_done full_material_done total_done total_expected
+    local adaptive_m1_done adaptive_m5_done adaptive_m10_done full_material_done total_done total_expected
     adaptive_m1_done=$(count_completed_iterations "$SUITE_DIR/adaptive_m1/summary.csv")
+    adaptive_m5_done=$(count_completed_iterations "$SUITE_DIR/adaptive_m5/summary.csv")
     adaptive_m10_done=$(count_completed_iterations "$SUITE_DIR/adaptive_m10/summary.csv")
     full_material_done=$(count_completed_iterations "$SUITE_DIR/full_material/summary.csv")
-    total_done=$((adaptive_m1_done + adaptive_m10_done + full_material_done))
-    total_expected=$((COUNT * 3))
+    total_done=$((adaptive_m1_done + adaptive_m5_done + adaptive_m10_done + full_material_done))
+    total_expected=$((COUNT * 4))
 
     cat > "$SUITE_DIR/suite_progress.txt" <<EOF
 updated_at=$(date '+%Y-%m-%d %H:%M:%S %Z')
 phase=$CURRENT_PHASE
 adaptive_m1_completed=$adaptive_m1_done/$COUNT
+adaptive_m5_completed=$adaptive_m5_done/$COUNT
 adaptive_m10_completed=$adaptive_m10_done/$COUNT
 full_material_completed=$full_material_done/$COUNT
 total_completed=$total_done/$total_expected
@@ -157,6 +161,10 @@ while [ $# -gt 0 ]; do
             M10="$2"
             shift 2
             ;;
+        --m5)
+            M5="$2"
+            shift 2
+            ;;
         --full-m)
             FULL_M="$2"
             shift 2
@@ -189,6 +197,7 @@ top=$TOP
 threads=$THREADS
 sample_cap=$SAMPLE_CAP
 m1=$M1
+m5=$M5
 m10=$M10
 full_m=$FULL_M
 backend=$BACKEND
@@ -317,6 +326,7 @@ run_series() {
 }
 
 run_series "adaptive_m1" --m "$M1"
+REUSE_PREFIX_SUMMARY="$SUITE_DIR/adaptive_m1/summary.csv" run_series "adaptive_m5" --m "$M5"
 REUSE_PREFIX_SUMMARY="$SUITE_DIR/adaptive_m1/summary.csv" run_series "adaptive_m10" --m "$M10"
 REUSE_PREFIX_SUMMARY="$SUITE_DIR/adaptive_m1/summary.csv" run_series "full_material" --full-material --m "$FULL_M"
 

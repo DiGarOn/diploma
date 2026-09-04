@@ -5,29 +5,31 @@ For the current experiment setup, start from:
 - [SERVER_DEPLOY_AND_RUN_M1_M10_FULL_RU.md](/Users/dmitriydmitriygarkin/Documents/HSE/diploma/SERVER_DEPLOY_AND_RUN_M1_M10_FULL_RU.md)
 - [SERVER_4090_QUICKSTART_RU.md](/Users/dmitriydmitriygarkin/Documents/HSE/diploma/SERVER_4090_QUICKSTART_RU.md)
 
-These files describe the exact workflow for the `m1 / m10 / full_material` run on a rented CUDA server.
+These files describe the exact workflow for the `m1 / m5 / m10 / full_material` run on a rented CUDA server.
 
 ## Current execution model
 
-The suite now runs three series:
+The suite now runs four series:
 
 - `adaptive_m1`
+- `adaptive_m5`
 - `adaptive_m10`
 - `full_material`
 
-The expensive prefix stage is computed once in `adaptive_m1`. The next two series reuse it through `--reuse-prefix-summary`.
+The expensive prefix stage is computed once in `adaptive_m1`. The next three series reuse it through `--reuse-prefix-summary`.
 
 ## Recommended launch command
 
 ```bash
-bash tools/server_run_4090.sh --count 131072 --threads 16
+bash tools/server_run_4090.sh --count 524288 --seed 2 --threads 16
 ```
 
 ## Resume command
 
 ```bash
 bash tools/server_run_4090.sh \
-  --count 131072 \
+  --count 524288 \
+  --seed 2 \
   --threads 16 \
   --suite-dir results/key_recovery_suite/<run_dir>
 ```

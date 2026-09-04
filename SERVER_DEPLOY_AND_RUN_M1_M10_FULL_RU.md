@@ -75,19 +75,21 @@ rsync -avh --progress \
 
 ## 4. Что теперь считает suite
 
-Текущий прогон состоит из трех серий:
+Текущий прогон состоит из четырех серий:
 
 1. `adaptive_m1`
-2. `adaptive_m10`
-3. `full_material`
+2. `adaptive_m5`
+3. `adaptive_m10`
+4. `full_material`
 
 Логика такая:
 
 - в `adaptive_m1` вычисляется тяжелая prefix-часть;
+- в `adaptive_m5` она переиспользуется через `--reuse-prefix-summary`;
 - в `adaptive_m10` она переиспользуется через `--reuse-prefix-summary`;
 - в `full_material` она тоже переиспользуется.
 
-То есть тяжелый префиксный расчет не повторяется три раза.
+То есть тяжелый префиксный расчет не повторяется четыре раза.
 
 ## 5. Какие новые метрики добавлены
 
@@ -168,7 +170,7 @@ tmux new -s diploma
 
 ```bash
 cd /workspace/diploma
-bash tools/server_run_4090.sh --count 131072 --threads 16
+bash tools/server_run_4090.sh --count 524288 --seed 2 --threads 16
 ```
 
 Отсоединиться:
@@ -190,9 +192,10 @@ tmux attach -t diploma
 ```bash
 cd /workspace/diploma
 bash tools/server_run_4090.sh \
-  --count 131072 \
+  --count 524288 \
+  --seed 2 \
   --threads 16 \
-  --suite-dir /workspace/diploma/results/key_recovery_suite/m1_m10_full_131072_$(date +%Y%m%d_%H%M)
+  --suite-dir /workspace/diploma/results/key_recovery_suite/m1_m5_m10_full_524288_seed2_$(date +%Y%m%d_%H%M)
 ```
 
 ## 10. Как смотреть прогресс
@@ -216,6 +219,7 @@ bash tools/server_tail_progress.sh "$RUN_DIR"
 ```bash
 cat "$RUN_DIR/suite_progress.txt"
 cat "$RUN_DIR/adaptive_m1/progress.txt"
+cat "$RUN_DIR/adaptive_m5/progress.txt"
 cat "$RUN_DIR/adaptive_m10/progress.txt"
 cat "$RUN_DIR/full_material/progress.txt"
 tail -n 50 "$RUN_DIR/suite_progress.log"
@@ -241,7 +245,8 @@ while true; do nvidia-smi; sleep 2; clear; done
 ```bash
 cd /workspace/diploma
 bash tools/server_run_4090.sh \
-  --count 131072 \
+  --count 524288 \
+  --seed 2 \
   --threads 16 \
   --suite-dir /workspace/diploma/results/key_recovery_suite/<run_dir>
 ```
