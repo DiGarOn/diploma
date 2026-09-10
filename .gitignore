@@ -57,9 +57,13 @@ docs/_build/
 
 # Generated experiment artifacts
 deliverables/
+from_server/
 results/key_recovery/
 results/key_recovery_suite/
 results/server_preflight/
+results/**/*.csv
+*.tar.gz
+*.zip
 
 # Temporary files
 *.tmp
