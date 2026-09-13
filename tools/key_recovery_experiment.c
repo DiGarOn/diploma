@@ -69,6 +69,29 @@ typedef struct {
     int32_t max_abs_score_signed_min;
     int32_t max_abs_score_signed_max;
     int32_t min_abs_score_value;
+    uint16_t last4_selected_prefix_alpha;
+    uint16_t last4_selected_prefix_beta;
+    uint16_t last4_true_middle_mask;
+    uint16_t last4_true_middle_mask_after_t;
+    uint16_t last4_true_output_mask;
+    uint16_t last4_false_max_key_pair;
+    uint16_t last4_false_max_middle_mask;
+    uint16_t last4_false_max_middle_mask_after_t;
+    uint16_t last4_false_max_output_mask;
+    uint32_t last4_prefix_beta_count;
+    uint32_t last4_true_delta1_abs_num;
+    uint32_t last4_true_delta2_abs_num;
+    uint64_t last4_true_product_num;
+    uint32_t last4_false_max_delta1_abs_num;
+    uint32_t last4_false_max_delta2_abs_num;
+    uint64_t last4_false_product_max_num;
+    uint64_t last4_false_product_sum_num;
+    double last4_true_product_value;
+    double last4_false_product_max_value;
+    double last4_false_product_mean_value;
+    double last4_false_true_product_ratio;
+    double last4_false_mean_true_product_ratio;
+    double last4_time_sec;
     double delta_time_sec;
     double recovery_time_sec;
     double total_time_sec;
@@ -96,6 +119,7 @@ typedef struct {
     const char *reuse_prefix_summary;
     KeyRecoveryBackend backend_mode;
     uint32_t cuda_threshold_count;
+    bool enable_last4_metric;
 } Config;
 
 typedef struct {
@@ -108,6 +132,9 @@ typedef struct {
 static uint8_t ROUND_TABLE[256][256];
 static uint8_t PARITY8_TABLE[256];
 static uint16_t SAMPLE_DOMAIN[65536];
+static int16_t *SBOX_LAT_BY_KEY = NULL;
+static uint16_t SBOX_LAT_ROWMAX_ABS[256][256];
+static uint8_t SBOX_LAT_ROWMAX_U[256][256];
 static const int32_t DELTA_TOLERANCE_COEFF_2_NEG_15 = 1;
 
 typedef struct {
@@ -123,7 +150,24 @@ typedef struct {
     int32_t exact_signed_max;
     int32_t near_signed_min;
     int32_t near_signed_max;
+    PrefixMaxPair *exact_pairs;
+    uint32_t exact_pair_capacity;
 } SpectrumWorker;
+
+typedef struct {
+    uint32_t candidate_start;
+    uint32_t candidate_end;
+    uint16_t true_candidate;
+    const uint16_t *middles_after_t;
+    uint32_t middle_count;
+    uint32_t delta1_abs_num;
+    uint64_t product_sum;
+    uint64_t best_product;
+    uint32_t best_d2_abs_num;
+    uint16_t best_candidate;
+    uint16_t best_middle_after_t;
+    uint16_t best_output_mask;
+} Last4FalseWorker;
 
 static inline double now_sec(void) {
     struct timespec ts;
@@ -327,6 +371,30 @@ static bool spectrum_is_better(
     return candidate_alpha < current_alpha;
 }
 
+static int append_prefix_pair(PrefixMaxPair **pairs, uint32_t *count, uint32_t *capacity, PrefixMaxPair pair) {
+    if (*count == *capacity) {
+        uint32_t new_capacity = *capacity == 0 ? 16u : (*capacity * 2u);
+        PrefixMaxPair *new_pairs = (PrefixMaxPair *)realloc(*pairs, (size_t)new_capacity * sizeof(PrefixMaxPair));
+        if (!new_pairs) {
+            return -1;
+        }
+        *pairs = new_pairs;
+        *capacity = new_capacity;
+    }
+    (*pairs)[(*count)++] = pair;
+    return 0;
+}
+
+static void free_prefix_spectrum(PrefixSpectrum *spectrum) {
+    if (!spectrum) {
+        return;
+    }
+    free(spectrum->exact_max_pairs);
+    spectrum->exact_max_pairs = NULL;
+    spectrum->exact_max_pair_count = 0;
+    spectrum->exact_max_pairs_truncated = false;
+}
+
 static void *compute_prefix_spectrum_worker(void *arg) {
     SpectrumWorker *worker = (SpectrumWorker *)arg;
     const float norm = 1.0f / 65536.0f;
@@ -338,6 +406,8 @@ static void *compute_prefix_spectrum_worker(void *arg) {
     worker->exact_signed_max = INT32_MIN;
     worker->near_signed_min = INT32_MAX;
     worker->near_signed_max = INT32_MIN;
+    worker->exact_pair_capacity = 0;
+    worker->exact_pairs = NULL;
     worker->result.alpha = 0;
     worker->result.beta = 0;
     worker->result.delta = 0.0f;
@@ -369,6 +439,11 @@ static void *compute_prefix_spectrum_worker(void *arg) {
                 worker->result.beta
             );
             if (abs_coeff > worker->best_abs) {
+                PrefixMaxPair pair = {
+                    .alpha = (uint16_t)alpha,
+                    .beta = (uint16_t)beta,
+                    .signed_correlation = signed_coeff,
+                };
                 if (worker->best_abs == abs_coeff - DELTA_TOLERANCE_COEFF_2_NEG_15) {
                     worker->near_pair_count = worker->exact_pair_count;
                     worker->near_signed_min = worker->exact_signed_min;
@@ -382,8 +457,32 @@ static void *compute_prefix_spectrum_worker(void *arg) {
                 worker->exact_pair_count = 1;
                 worker->exact_signed_min = signed_coeff;
                 worker->exact_signed_max = signed_coeff;
+                worker->result.exact_max_pair_count = 0;
+                if (append_prefix_pair(
+                    &worker->exact_pairs,
+                    &worker->result.exact_max_pair_count,
+                    &worker->exact_pair_capacity,
+                    pair
+                ) != 0) {
+                    fprintf(stderr, "Не удалось сохранить prefix max pair\n");
+                    return NULL;
+                }
             } else if (abs_coeff == worker->best_abs) {
+                PrefixMaxPair pair = {
+                    .alpha = (uint16_t)alpha,
+                    .beta = (uint16_t)beta,
+                    .signed_correlation = signed_coeff,
+                };
                 worker->exact_pair_count++;
+                if (append_prefix_pair(
+                    &worker->exact_pairs,
+                    &worker->result.exact_max_pair_count,
+                    &worker->exact_pair_capacity,
+                    pair
+                ) != 0) {
+                    fprintf(stderr, "Не удалось сохранить prefix max pair\n");
+                    return NULL;
+                }
                 if (signed_coeff < worker->exact_signed_min) {
                     worker->exact_signed_min = signed_coeff;
                 }
@@ -447,6 +546,9 @@ static PrefixSpectrum compute_prefix_spectrum(const uint16_t *lookup_table, uint
     uint32_t global_tol_pair_count = 0;
     int32_t global_tol_signed_min = INT32_MAX;
     int32_t global_tol_signed_max = INT32_MIN;
+    PrefixMaxPair *global_pairs = NULL;
+    uint32_t global_pair_count = 0;
+    uint32_t global_pair_capacity = 0;
     const int beta_count = 65535;
 
     if (thread_count < 1) {
@@ -493,6 +595,10 @@ static PrefixSpectrum compute_prefix_spectrum(const uint16_t *lookup_table, uint
     for (uint32_t t = 0; t < thread_count; t++) {
         pthread_join(threads[t], NULL);
         if (workers[t].best_abs > global_best_abs) {
+            free(global_pairs);
+            global_pairs = NULL;
+            global_pair_count = 0;
+            global_pair_capacity = 0;
             global_best_abs = workers[t].best_abs;
             result = workers[t].result;
             global_exact_pair_count = workers[t].exact_pair_count;
@@ -505,6 +611,22 @@ static PrefixSpectrum compute_prefix_spectrum(const uint16_t *lookup_table, uint
                 }
                 if (workers[t].near_signed_max > global_tol_signed_max) {
                     global_tol_signed_max = workers[t].near_signed_max;
+                }
+            }
+            for (uint32_t i = 0; i < workers[t].result.exact_max_pair_count; i++) {
+                if (append_prefix_pair(
+                    &global_pairs,
+                    &global_pair_count,
+                    &global_pair_capacity,
+                    workers[t].exact_pairs[i]
+                ) != 0) {
+                    fprintf(stderr, "Не удалось объединить prefix max pairs\n");
+                    free(workers[t].f_buffer);
+                    free(workers[t].exact_pairs);
+                    free(global_pairs);
+                    free(workers);
+                    free(threads);
+                    return result;
                 }
             }
         } else {
@@ -522,6 +644,22 @@ static PrefixSpectrum compute_prefix_spectrum(const uint16_t *lookup_table, uint
             if (workers[t].best_abs == global_best_abs) {
                 global_exact_pair_count += workers[t].exact_pair_count;
                 global_tol_pair_count += workers[t].exact_pair_count + workers[t].near_pair_count;
+                for (uint32_t i = 0; i < workers[t].result.exact_max_pair_count; i++) {
+                    if (append_prefix_pair(
+                        &global_pairs,
+                        &global_pair_count,
+                        &global_pair_capacity,
+                        workers[t].exact_pairs[i]
+                    ) != 0) {
+                        fprintf(stderr, "Не удалось объединить prefix max pairs\n");
+                        free(workers[t].f_buffer);
+                        free(workers[t].exact_pairs);
+                        free(global_pairs);
+                        free(workers);
+                        free(threads);
+                        return result;
+                    }
+                }
                 if (workers[t].exact_signed_min < global_tol_signed_min) {
                     global_tol_signed_min = workers[t].exact_signed_min;
                 }
@@ -547,6 +685,7 @@ static PrefixSpectrum compute_prefix_spectrum(const uint16_t *lookup_table, uint
             }
         }
         free(workers[t].f_buffer);
+        free(workers[t].exact_pairs);
     }
 
     result.abs_coeff = global_best_abs < 0 ? 0 : global_best_abs;
@@ -554,10 +693,440 @@ static PrefixSpectrum compute_prefix_spectrum(const uint16_t *lookup_table, uint
     result.tol_pair_count = global_tol_pair_count;
     result.tol_signed_min = (global_tol_signed_min == INT32_MAX) ? 0 : global_tol_signed_min;
     result.tol_signed_max = (global_tol_signed_max == INT32_MIN) ? 0 : global_tol_signed_max;
+    result.exact_max_pairs = global_pairs;
+    result.exact_max_pair_count = global_pair_count;
+    result.exact_max_pairs_truncated = false;
 
     free(workers);
     free(threads);
     return result;
+}
+
+static inline int16_t sbox_lat_value(uint8_t key, uint8_t input_mask, uint8_t output_mask) {
+    return SBOX_LAT_BY_KEY[((size_t)key << 16) | ((size_t)input_mask << 8) | (size_t)output_mask];
+}
+
+static int ensure_sbox_lat_tables(void) {
+    if (SBOX_LAT_BY_KEY) {
+        return 0;
+    }
+
+    SBOX_LAT_BY_KEY = (int16_t *)malloc(256u * 256u * 256u * sizeof(int16_t));
+    if (!SBOX_LAT_BY_KEY) {
+        fprintf(stderr, "Не удалось выделить память под LAT таблицы для last4 метрики\n");
+        return -1;
+    }
+
+    for (int key = 0; key < 256; key++) {
+        for (int input_mask = 0; input_mask < 256; input_mask++) {
+            for (int output_mask = 0; output_mask < 256; output_mask++) {
+                int sum = 0;
+                for (int x = 0; x < 256; x++) {
+                    uint8_t y = round_function((uint8_t)x, (uint8_t)key);
+                    uint8_t parity = (uint8_t)(
+                        PARITY8_TABLE[(uint8_t)input_mask & (uint8_t)x] ^
+                        PARITY8_TABLE[(uint8_t)output_mask & y]
+                    );
+                    sum += parity ? -1 : 1;
+                }
+                SBOX_LAT_BY_KEY[((size_t)key << 16) | ((size_t)input_mask << 8) | (size_t)output_mask] = (int16_t)sum;
+            }
+        }
+    }
+
+    for (int key = 0; key < 256; key++) {
+        for (int output_mask = 0; output_mask < 256; output_mask++) {
+            uint16_t best_abs = 0;
+            uint8_t best_input_mask = 0;
+            for (int input_mask = 0; input_mask < 256; input_mask++) {
+                int value = sbox_lat_value((uint8_t)key, (uint8_t)input_mask, (uint8_t)output_mask);
+                uint16_t abs_value = (uint16_t)(value < 0 ? -value : value);
+                if (abs_value > best_abs) {
+                    best_abs = abs_value;
+                    best_input_mask = (uint8_t)input_mask;
+                }
+            }
+            SBOX_LAT_ROWMAX_ABS[key][output_mask] = best_abs;
+            SBOX_LAT_ROWMAX_U[key][output_mask] = best_input_mask;
+        }
+    }
+
+    return 0;
+}
+
+static uint32_t two_round_abs_num(
+    uint8_t first_key,
+    uint8_t second_key,
+    uint16_t input_mask,
+    uint16_t output_mask,
+    int32_t *signed_num_out
+) {
+    uint8_t a_left = (uint8_t)(input_mask >> 8);
+    uint8_t a_right = (uint8_t)(input_mask & 0xFFu);
+    uint8_t c_left = (uint8_t)(output_mask >> 8);
+    uint8_t c_right = (uint8_t)(output_mask & 0xFFu);
+    int32_t left = sbox_lat_value(first_key, (uint8_t)(a_left ^ c_left), a_right);
+    int32_t right = sbox_lat_value(second_key, (uint8_t)(a_right ^ c_right), c_left);
+    int32_t product = left * right;
+    if (signed_num_out) {
+        *signed_num_out = product;
+    }
+    return (uint32_t)(product < 0 ? -product : product);
+}
+
+static void best_two_round_for_input(
+    uint8_t first_key,
+    uint8_t second_key,
+    uint16_t input_mask,
+    uint32_t *abs_num_out,
+    int32_t *signed_num_out,
+    uint16_t *output_mask_out
+) {
+    uint8_t a_left = (uint8_t)(input_mask >> 8);
+    uint8_t a_right = (uint8_t)(input_mask & 0xFFu);
+    uint32_t best_abs = 0;
+    int32_t best_signed = 0;
+    uint16_t best_output = 0;
+
+    for (int c_left = 0; c_left < 256; c_left++) {
+        uint8_t rowmax_u = SBOX_LAT_ROWMAX_U[second_key][c_left];
+        uint8_t c_right = (uint8_t)(a_right ^ rowmax_u);
+        int32_t left = sbox_lat_value(first_key, (uint8_t)(a_left ^ (uint8_t)c_left), a_right);
+        int32_t right = sbox_lat_value(second_key, rowmax_u, (uint8_t)c_left);
+        int32_t product = left * right;
+        uint32_t abs_product = (uint32_t)(product < 0 ? -product : product);
+        uint16_t output_mask = (uint16_t)(((uint16_t)c_left << 8) | c_right);
+
+        if (abs_product > best_abs || (abs_product == best_abs && output_mask < best_output)) {
+            best_abs = abs_product;
+            best_signed = product;
+            best_output = output_mask;
+        }
+    }
+
+    if (abs_num_out) {
+        *abs_num_out = best_abs;
+    }
+    if (signed_num_out) {
+        *signed_num_out = best_signed;
+    }
+    if (output_mask_out) {
+        *output_mask_out = best_output;
+    }
+}
+
+static int collect_true_tail_middle_maxima(
+    uint8_t true_k2,
+    uint8_t true_k1,
+    uint16_t beta,
+    uint16_t **middle_after_t_out,
+    uint32_t *middle_count_out,
+    uint32_t *delta1_abs_num_out
+) {
+    uint16_t *middles = NULL;
+    uint32_t count = 0;
+    uint32_t capacity = 0;
+    uint32_t best_abs = 0;
+
+    *middle_after_t_out = NULL;
+    *middle_count_out = 0;
+    *delta1_abs_num_out = 0;
+
+    for (uint32_t middle_after_t = 1; middle_after_t < 65536u; middle_after_t++) {
+        uint16_t middle_before_t = swap16((uint16_t)middle_after_t);
+        uint32_t abs_num = two_round_abs_num(true_k2, true_k1, beta, middle_before_t, NULL);
+        if (abs_num > best_abs) {
+            best_abs = abs_num;
+            count = 0;
+        }
+        if (abs_num == best_abs && abs_num > 0) {
+            if (count == capacity) {
+                uint32_t new_capacity = capacity == 0 ? 64u : capacity * 2u;
+                uint16_t *new_middles = (uint16_t *)realloc(middles, new_capacity * sizeof(uint16_t));
+                if (!new_middles) {
+                    fprintf(stderr, "Не удалось выделить память под middle masks для last4 метрики\n");
+                    free(middles);
+                    return -1;
+                }
+                middles = new_middles;
+                capacity = new_capacity;
+            }
+            middles[count++] = (uint16_t)middle_after_t;
+        }
+    }
+
+    if (count == 0) {
+        free(middles);
+        return -1;
+    }
+
+    *middle_after_t_out = middles;
+    *middle_count_out = count;
+    *delta1_abs_num_out = best_abs;
+    return 0;
+}
+
+static void *last4_false_worker_main(void *arg) {
+    Last4FalseWorker *worker = (Last4FalseWorker *)arg;
+
+    worker->product_sum = 0;
+    worker->best_product = 0;
+    worker->best_d2_abs_num = 0;
+    worker->best_candidate = 0;
+    worker->best_middle_after_t = 0;
+    worker->best_output_mask = 0;
+
+    for (uint32_t candidate = worker->candidate_start; candidate < worker->candidate_end; candidate++) {
+        uint8_t k1 = (uint8_t)(candidate >> 8);
+        uint8_t k2 = (uint8_t)(candidate & 0xFFu);
+        uint32_t candidate_best_d2 = 0;
+        uint16_t candidate_best_middle_after_t = 0;
+        uint16_t candidate_best_output = 0;
+        uint64_t product = 0;
+
+        if ((uint16_t)candidate == worker->true_candidate) {
+            continue;
+        }
+
+        for (uint32_t i = 0; i < worker->middle_count; i++) {
+            uint32_t d2_abs = 0;
+            uint16_t output_mask = 0;
+            best_two_round_for_input(k2, k1, worker->middles_after_t[i], &d2_abs, NULL, &output_mask);
+            if (d2_abs > candidate_best_d2 ||
+                (d2_abs == candidate_best_d2 && worker->middles_after_t[i] < candidate_best_middle_after_t)) {
+                candidate_best_d2 = d2_abs;
+                candidate_best_middle_after_t = worker->middles_after_t[i];
+                candidate_best_output = output_mask;
+            }
+        }
+
+        product = (uint64_t)worker->delta1_abs_num * (uint64_t)candidate_best_d2;
+        worker->product_sum += product;
+        if (product > worker->best_product ||
+            (product == worker->best_product && (uint16_t)candidate < worker->best_candidate)) {
+            worker->best_product = product;
+            worker->best_d2_abs_num = candidate_best_d2;
+            worker->best_candidate = (uint16_t)candidate;
+            worker->best_middle_after_t = candidate_best_middle_after_t;
+            worker->best_output_mask = candidate_best_output;
+        }
+    }
+
+    return NULL;
+}
+
+static int compute_last4_metric_for_pair(
+    const Config *config,
+    const uint8_t key[4],
+    PrefixMaxPair prefix_pair,
+    IterationResult *result
+) {
+    uint16_t *middles_after_t = NULL;
+    uint32_t middle_count = 0;
+    uint32_t delta1_abs_num = 0;
+    uint32_t true_best_d2 = 0;
+    uint16_t true_best_middle_after_t = 0;
+    uint16_t true_best_output = 0;
+    uint64_t false_best_product = 0;
+    uint32_t false_best_d2 = 0;
+    uint16_t false_best_candidate = 0;
+    uint16_t false_best_middle_after_t = 0;
+    uint16_t false_best_output = 0;
+    uint64_t false_product_sum = 0;
+    uint16_t true_candidate = (uint16_t)(((uint16_t)result->true_k1 << 8) | result->true_k2);
+    double start = now_sec();
+
+    if (!result) {
+        return -1;
+    }
+    if (ensure_sbox_lat_tables() != 0) {
+        return -1;
+    }
+
+    result->last4_selected_prefix_alpha = prefix_pair.alpha;
+    result->last4_selected_prefix_beta = prefix_pair.beta;
+
+    if (collect_true_tail_middle_maxima(
+        key[2],
+        key[3],
+        prefix_pair.beta,
+        &middles_after_t,
+        &middle_count,
+        &delta1_abs_num
+    ) != 0) {
+        return -1;
+    }
+
+    for (uint32_t i = 0; i < middle_count; i++) {
+        uint32_t d2_abs = 0;
+        uint16_t output_mask = 0;
+        best_two_round_for_input(key[2], key[3], middles_after_t[i], &d2_abs, NULL, &output_mask);
+        if (d2_abs > true_best_d2 ||
+            (d2_abs == true_best_d2 && middles_after_t[i] < true_best_middle_after_t)) {
+            true_best_d2 = d2_abs;
+            true_best_middle_after_t = middles_after_t[i];
+            true_best_output = output_mask;
+        }
+    }
+
+    result->last4_true_delta1_abs_num = delta1_abs_num;
+    result->last4_true_delta2_abs_num = true_best_d2;
+    result->last4_true_product_num = (uint64_t)delta1_abs_num * (uint64_t)true_best_d2;
+    result->last4_true_middle_mask_after_t = true_best_middle_after_t;
+    result->last4_true_middle_mask = swap16(true_best_middle_after_t);
+    result->last4_true_output_mask = true_best_output;
+
+    {
+        uint32_t thread_count = config->thread_count == 0 ? 1u : config->thread_count;
+        Last4FalseWorker *workers = NULL;
+        pthread_t *threads = NULL;
+
+        if (thread_count > 64u) {
+            thread_count = 64u;
+        }
+        if (thread_count > 65536u) {
+            thread_count = 65536u;
+        }
+
+        workers = (Last4FalseWorker *)calloc(thread_count, sizeof(Last4FalseWorker));
+        threads = (pthread_t *)calloc(thread_count, sizeof(pthread_t));
+        if (!workers || !threads) {
+            fprintf(stderr, "Не удалось выделить память под потоки last4 метрики\n");
+            free(workers);
+            free(threads);
+            free(middles_after_t);
+            return -1;
+        }
+
+        for (uint32_t t = 0; t < thread_count; t++) {
+            workers[t].candidate_start = (uint32_t)((uint64_t)t * 65536u / thread_count);
+            workers[t].candidate_end = (uint32_t)((uint64_t)(t + 1u) * 65536u / thread_count);
+            workers[t].true_candidate = true_candidate;
+            workers[t].middles_after_t = middles_after_t;
+            workers[t].middle_count = middle_count;
+            workers[t].delta1_abs_num = delta1_abs_num;
+            if (pthread_create(&threads[t], NULL, last4_false_worker_main, &workers[t]) != 0) {
+                fprintf(stderr, "Не удалось создать поток last4 %" PRIu32 "\n", t);
+                for (uint32_t j = 0; j < t; j++) {
+                    pthread_join(threads[j], NULL);
+                }
+                free(workers);
+                free(threads);
+                free(middles_after_t);
+                return -1;
+            }
+        }
+
+        for (uint32_t t = 0; t < thread_count; t++) {
+            pthread_join(threads[t], NULL);
+            false_product_sum += workers[t].product_sum;
+            if (workers[t].best_product > false_best_product ||
+                (workers[t].best_product == false_best_product && workers[t].best_candidate < false_best_candidate)) {
+                false_best_product = workers[t].best_product;
+                false_best_d2 = workers[t].best_d2_abs_num;
+                false_best_candidate = workers[t].best_candidate;
+                false_best_middle_after_t = workers[t].best_middle_after_t;
+                false_best_output = workers[t].best_output_mask;
+            }
+        }
+
+        free(workers);
+        free(threads);
+    }
+
+    result->last4_false_max_key_pair = false_best_candidate;
+    result->last4_false_max_delta1_abs_num = delta1_abs_num;
+    result->last4_false_max_delta2_abs_num = false_best_d2;
+    result->last4_false_product_max_num = false_best_product;
+    result->last4_false_product_sum_num = false_product_sum;
+    result->last4_false_max_middle_mask_after_t = false_best_middle_after_t;
+    result->last4_false_max_middle_mask = swap16(false_best_middle_after_t);
+    result->last4_false_max_output_mask = false_best_output;
+
+    result->last4_true_product_value = (double)result->last4_true_product_num / 4294967296.0;
+    result->last4_false_product_max_value = (double)result->last4_false_product_max_num / 4294967296.0;
+    result->last4_false_product_mean_value = (double)result->last4_false_product_sum_num / (4294967296.0 * 65535.0);
+    if (result->last4_true_product_value > 0.0) {
+        result->last4_false_true_product_ratio =
+            result->last4_false_product_max_value / result->last4_true_product_value;
+        result->last4_false_mean_true_product_ratio =
+            result->last4_false_product_mean_value / result->last4_true_product_value;
+    }
+    result->last4_time_sec = now_sec() - start;
+
+    free(middles_after_t);
+    return 0;
+}
+
+static bool last4_candidate_is_better(const IterationResult *candidate, const IterationResult *best, bool have_best) {
+    if (!have_best) {
+        return true;
+    }
+    if (candidate->last4_false_product_max_num > best->last4_false_product_max_num) {
+        return true;
+    }
+    if (candidate->last4_false_product_max_num < best->last4_false_product_max_num) {
+        return false;
+    }
+    if (candidate->last4_true_product_num > best->last4_true_product_num) {
+        return true;
+    }
+    if (candidate->last4_true_product_num < best->last4_true_product_num) {
+        return false;
+    }
+    if (candidate->last4_selected_prefix_beta < best->last4_selected_prefix_beta) {
+        return true;
+    }
+    if (candidate->last4_selected_prefix_beta > best->last4_selected_prefix_beta) {
+        return false;
+    }
+    return candidate->last4_selected_prefix_alpha < best->last4_selected_prefix_alpha;
+}
+
+static int compute_last4_metric(
+    const Config *config,
+    const uint8_t key[4],
+    const PrefixSpectrum *spectrum,
+    IterationResult *result
+) {
+    PrefixMaxPair canonical_pair = {
+        .alpha = spectrum ? spectrum->alpha : 0,
+        .beta = spectrum ? spectrum->beta : 0,
+        .signed_correlation = spectrum ? spectrum->signed_correlation : 0,
+    };
+    const PrefixMaxPair *pairs = &canonical_pair;
+    uint32_t pair_count = 1;
+    IterationResult best_result = {0};
+    bool have_best = false;
+    double total_start = now_sec();
+
+    if (!result || !spectrum) {
+        return -1;
+    }
+    if (spectrum->exact_max_pairs && spectrum->exact_max_pair_count > 0) {
+        pairs = spectrum->exact_max_pairs;
+        pair_count = spectrum->exact_max_pair_count;
+    }
+
+    for (uint32_t i = 0; i < pair_count; i++) {
+        IterationResult candidate_result = *result;
+        if (compute_last4_metric_for_pair(config, key, pairs[i], &candidate_result) != 0) {
+            return -1;
+        }
+        if (last4_candidate_is_better(&candidate_result, &best_result, have_best)) {
+            best_result = candidate_result;
+            have_best = true;
+        }
+    }
+
+    if (!have_best) {
+        return -1;
+    }
+
+    best_result.last4_prefix_beta_count = pair_count;
+    best_result.last4_time_sec = now_sec() - total_start;
+    *result = best_result;
+    return 0;
 }
 
 static int select_active_backend(
@@ -962,6 +1531,7 @@ static int run_iteration(
         top = (CandidateScore *)calloc(config->top_count, sizeof(CandidateScore));
         if (!top) {
             fprintf(stderr, "Не удалось выделить память под top candidates\n");
+            free_prefix_spectrum(&spectrum);
             return -1;
         }
 
@@ -1044,6 +1614,15 @@ static int run_iteration(
         }
     }
 
+    if (config->enable_last4_metric) {
+        if (compute_last4_metric(config, key, &spectrum, &result) != 0) {
+            free(top);
+            free_prefix_spectrum(&spectrum);
+            return -1;
+        }
+    }
+    result.total_time_sec = now_sec() - total_start;
+
     if (summary_csv) {
         char prefix_abs_fraction[64];
         char prefix_signed_fraction[64];
@@ -1086,7 +1665,7 @@ static int run_iteration(
 
         fprintf(
             summary_csv,
-            "%s,%s,%s,%.6f,%" PRIu32 ",%" PRIu32 ",%" PRIu64 ",%s,%" PRIu32 ",0x%08" PRIX32 ",0x%02X,0x%02X,0x%02X,0x%02X,0x%04X,0x%04X,%.10f,%" PRId32 ",65536,%s,%.10f,%" PRId32 ",65536,%s,%" PRIu32 ",%.10f,%.10f,%" PRIu32 ",0x%02X,0x%02X,%.10f,%" PRId32 ",%" PRIu32 ",%s,%.10f,%" PRId32 ",%" PRIu32 ",%s,%" PRIu32 ",%.10f,%" PRId64 ",%" PRIu64 ",%s,%.10f,%" PRId64 ",%" PRIu64 ",%s,%.10f,%" PRId32 ",%" PRIu32 ",%s,%" PRIu32 ",0x%02X,0x%02X,%.10f,%" PRId32 ",%" PRIu32 ",%s,%.10f,%.10f,%" PRId64 ",%" PRIu64 ",%s,%" PRIu32 ",%" PRIu32 ",%.10f,%.10f,%" PRId32 ",%" PRId32 ",%s,%s,%.10f,%" PRId32 ",%" PRIu32 ",%s,%.4f,%.4f,%.4f\n",
+            "%s,%s,%s,%.6f,%" PRIu32 ",%" PRIu32 ",%" PRIu64 ",%s,%" PRIu32 ",0x%08" PRIX32 ",0x%02X,0x%02X,0x%02X,0x%02X,0x%04X,0x%04X,%.10f,%" PRId32 ",65536,%s,%.10f,%" PRId32 ",65536,%s,%" PRIu32 ",%.10f,%.10f,%" PRIu32 ",0x%02X,0x%02X,%.10f,%" PRId32 ",%" PRIu32 ",%s,%.10f,%" PRId32 ",%" PRIu32 ",%s,%" PRIu32 ",%.10f,%" PRId64 ",%" PRIu64 ",%s,%.10f,%" PRId64 ",%" PRIu64 ",%s,%.10f,%" PRId32 ",%" PRIu32 ",%s,%" PRIu32 ",0x%02X,0x%02X,%.10f,%" PRId32 ",%" PRIu32 ",%s,%.10f,%.10f,%" PRId64 ",%" PRIu64 ",%s,%" PRIu32 ",%" PRIu32 ",%.10f,%.10f,%" PRId32 ",%" PRId32 ",%s,%s,%.10f,%" PRId32 ",%" PRIu32 ",%s,%" PRIu32 ",0x%04X,0x%04X,%.12f,%" PRIu64 ",4294967296,%.12f,%" PRIu32 ",%.12f,%" PRIu32 ",0x%04X,0x%04X,0x%04X,%.12f,%" PRIu64 ",4294967296,%.12f,%" PRIu64 ",281470681743360,0x%04X,%.12f,%" PRIu32 ",%.12f,%" PRIu32 ",0x%04X,0x%04X,0x%04X,%.12f,%.12f,%.4f,%.4f,%.4f,%.4f\n",
             path_basename_const(config->output_dir),
             config->series_label ? config->series_label : "default",
             sample_mode_name(config),
@@ -1160,6 +1739,33 @@ static int run_iteration(
             result.min_abs_score_value,
             result.sample_count,
             min_abs_fraction,
+            result.last4_prefix_beta_count,
+            result.last4_selected_prefix_alpha,
+            result.last4_selected_prefix_beta,
+            result.last4_true_product_value,
+            result.last4_true_product_num,
+            (double)result.last4_true_delta1_abs_num / 65536.0,
+            result.last4_true_delta1_abs_num,
+            (double)result.last4_true_delta2_abs_num / 65536.0,
+            result.last4_true_delta2_abs_num,
+            result.last4_true_middle_mask,
+            result.last4_true_middle_mask_after_t,
+            result.last4_true_output_mask,
+            result.last4_false_product_max_value,
+            result.last4_false_product_max_num,
+            result.last4_false_product_mean_value,
+            result.last4_false_product_sum_num,
+            result.last4_false_max_key_pair,
+            (double)result.last4_false_max_delta1_abs_num / 65536.0,
+            result.last4_false_max_delta1_abs_num,
+            (double)result.last4_false_max_delta2_abs_num / 65536.0,
+            result.last4_false_max_delta2_abs_num,
+            result.last4_false_max_middle_mask,
+            result.last4_false_max_middle_mask_after_t,
+            result.last4_false_max_output_mask,
+            result.last4_false_true_product_ratio,
+            result.last4_false_mean_true_product_ratio,
+            result.last4_time_sec,
             result.delta_time_sec,
             result.recovery_time_sec,
             result.total_time_sec
@@ -1179,6 +1785,7 @@ static int run_iteration(
             result.sample_count
         ) != 0) {
             free(top);
+            free_prefix_spectrum(&spectrum);
             return -1;
         }
     }
@@ -1196,6 +1803,7 @@ static int run_iteration(
             result.true_k2
         ) != 0) {
             free(top);
+            free_prefix_spectrum(&spectrum);
             return -1;
         }
     }
@@ -1227,6 +1835,7 @@ static int run_iteration(
     );
 
     free(top);
+    free_prefix_spectrum(&spectrum);
     return 0;
 }
 
@@ -1246,6 +1855,7 @@ static void print_usage(const char *argv0) {
         "  --threads N             Number of CPU threads for spectrum search\n"
         "  --backend MODE          Prefix backend: auto, cpu, cuda (default: auto)\n"
         "  --cuda-threshold-count  In auto mode use CUDA from this key count (default: 128)\n"
+        "  --disable-last4-metric  Do not compute the approved last-4-round tail metric\n"
         "  --reuse-prefix-summary  Reuse prefix spectrum from another summary.csv\n"
         "  --resume                Continue appending to existing summary.csv\n"
         "  --save-full-candidates  Save all 65536 candidate scores per key\n"
@@ -1528,6 +2138,7 @@ int main(int argc, char **argv) {
         .reuse_prefix_summary = NULL,
         .backend_mode = KEY_RECOVERY_BACKEND_AUTO,
         .cuda_threshold_count = 128,
+        .enable_last4_metric = true,
     };
     char summary_path[1024];
     char meta_path[1024];
@@ -1603,6 +2214,8 @@ int main(int argc, char **argv) {
                 fprintf(stderr, "Некорректное значение для --cuda-threshold-count\n");
                 return 1;
             }
+        } else if (strcmp(argv[i], "--disable-last4-metric") == 0) {
+            config.enable_last4_metric = false;
         } else if (strcmp(argv[i], "--reuse-prefix-summary") == 0 && i + 1 < argc) {
             config.reuse_prefix_summary = argv[++i];
         } else if (strcmp(argv[i], "--output-dir") == 0 && i + 1 < argc) {
@@ -1690,7 +2303,7 @@ int main(int argc, char **argv) {
     if (!config.resume || start_iteration == 0) {
         fprintf(
             summary_csv,
-            "RUN_ID,SERIES_LABEL,SAMPLE_MODE,SAMPLE_FACTOR_M,SAMPLE_CAP,THREAD_COUNT,SEED,FULL_MATERIAL,ITERATION,TRUE_KEY,K4,K3,K2,K1,PREFIX_ALPHA,PREFIX_BETA,PREFIX_DELTA_ABS_VALUE,PREFIX_DELTA_ABS_NUMERATOR,PREFIX_DELTA_ABS_DENOMINATOR,PREFIX_DELTA_ABS_FRACTION,PREFIX_DELTA_SIGNED_VALUE,PREFIX_DELTA_SIGNED_NUMERATOR,PREFIX_DELTA_SIGNED_DENOMINATOR,PREFIX_DELTA_SIGNED_FRACTION,PREFIX_MAX_PAIR_COUNT_TOL_2_NEG_15,PREFIX_MAX_SIGNED_VALUE_MIN_TOL,PREFIX_MAX_SIGNED_VALUE_MAX_TOL,SAMPLE_COUNT,TRUE_KEY_LAST_ROUND_K1,TRUE_KEY_LAST_ROUND_K2,TRUE_DELTA_SIGNED_VALUE,TRUE_DELTA_SIGNED_NUMERATOR,TRUE_DELTA_SIGNED_DENOMINATOR,TRUE_DELTA_SIGNED_FRACTION,TRUE_DELTA_ABS_VALUE,TRUE_DELTA_ABS_NUMERATOR,TRUE_DELTA_ABS_DENOMINATOR,TRUE_DELTA_ABS_FRACTION,TRUE_RANK,FALSE_DELTA_SIGNED_MEAN_VALUE,FALSE_DELTA_SIGNED_MEAN_NUMERATOR,FALSE_DELTA_SIGNED_MEAN_DENOMINATOR,FALSE_DELTA_SIGNED_MEAN_FRACTION,FALSE_DELTA_ABS_MEAN_VALUE,FALSE_DELTA_ABS_MEAN_NUMERATOR,FALSE_DELTA_ABS_MEAN_DENOMINATOR,FALSE_DELTA_ABS_MEAN_FRACTION,FALSE_DELTA_ABS_MAX_VALUE,FALSE_DELTA_ABS_MAX_NUMERATOR,FALSE_DELTA_ABS_MAX_DENOMINATOR,FALSE_DELTA_ABS_MAX_FRACTION,FALSE_DELTA_ABS_MAX_KEY_COUNT_TOL_1E_7,BEST_GUESS_K1,BEST_GUESS_K2,BEST_DELTA_SIGNED_VALUE,BEST_DELTA_SIGNED_NUMERATOR,BEST_DELTA_SIGNED_DENOMINATOR,BEST_DELTA_SIGNED_FRACTION,TRUE_FALSE_ABS_RATIO_VALUE,TRUE_FALSE_ABS_DIFF_VALUE,TRUE_FALSE_ABS_DIFF_NUMERATOR,TRUE_FALSE_ABS_DIFF_DENOMINATOR,TRUE_FALSE_ABS_DIFF_FRACTION,BEST_TIE_COUNT,TRUE_IN_BEST_TIES,MAX_ABS_DELTA_SIGNED_MIN_VALUE,MAX_ABS_DELTA_SIGNED_MAX_VALUE,MAX_ABS_DELTA_SIGNED_MIN_NUMERATOR,MAX_ABS_DELTA_SIGNED_MAX_NUMERATOR,MAX_ABS_DELTA_SIGNED_MIN_FRACTION,MAX_ABS_DELTA_SIGNED_MAX_FRACTION,MIN_ABS_DELTA_VALUE,MIN_ABS_DELTA_NUMERATOR,MIN_ABS_DELTA_DENOMINATOR,MIN_ABS_DELTA_FRACTION,DELTA_TIME_SEC,RECOVERY_TIME_SEC,TOTAL_TIME_SEC\n"
+            "RUN_ID,SERIES_LABEL,SAMPLE_MODE,SAMPLE_FACTOR_M,SAMPLE_CAP,THREAD_COUNT,SEED,FULL_MATERIAL,ITERATION,TRUE_KEY,K4,K3,K2,K1,PREFIX_ALPHA,PREFIX_BETA,PREFIX_DELTA_ABS_VALUE,PREFIX_DELTA_ABS_NUMERATOR,PREFIX_DELTA_ABS_DENOMINATOR,PREFIX_DELTA_ABS_FRACTION,PREFIX_DELTA_SIGNED_VALUE,PREFIX_DELTA_SIGNED_NUMERATOR,PREFIX_DELTA_SIGNED_DENOMINATOR,PREFIX_DELTA_SIGNED_FRACTION,PREFIX_MAX_PAIR_COUNT_TOL_2_NEG_15,PREFIX_MAX_SIGNED_VALUE_MIN_TOL,PREFIX_MAX_SIGNED_VALUE_MAX_TOL,SAMPLE_COUNT,TRUE_KEY_LAST_ROUND_K1,TRUE_KEY_LAST_ROUND_K2,TRUE_DELTA_SIGNED_VALUE,TRUE_DELTA_SIGNED_NUMERATOR,TRUE_DELTA_SIGNED_DENOMINATOR,TRUE_DELTA_SIGNED_FRACTION,TRUE_DELTA_ABS_VALUE,TRUE_DELTA_ABS_NUMERATOR,TRUE_DELTA_ABS_DENOMINATOR,TRUE_DELTA_ABS_FRACTION,TRUE_RANK,FALSE_DELTA_SIGNED_MEAN_VALUE,FALSE_DELTA_SIGNED_MEAN_NUMERATOR,FALSE_DELTA_SIGNED_MEAN_DENOMINATOR,FALSE_DELTA_SIGNED_MEAN_FRACTION,FALSE_DELTA_ABS_MEAN_VALUE,FALSE_DELTA_ABS_MEAN_NUMERATOR,FALSE_DELTA_ABS_MEAN_DENOMINATOR,FALSE_DELTA_ABS_MEAN_FRACTION,FALSE_DELTA_ABS_MAX_VALUE,FALSE_DELTA_ABS_MAX_NUMERATOR,FALSE_DELTA_ABS_MAX_DENOMINATOR,FALSE_DELTA_ABS_MAX_FRACTION,FALSE_DELTA_ABS_MAX_KEY_COUNT_TOL_1E_7,BEST_GUESS_K1,BEST_GUESS_K2,BEST_DELTA_SIGNED_VALUE,BEST_DELTA_SIGNED_NUMERATOR,BEST_DELTA_SIGNED_DENOMINATOR,BEST_DELTA_SIGNED_FRACTION,TRUE_FALSE_ABS_RATIO_VALUE,TRUE_FALSE_ABS_DIFF_VALUE,TRUE_FALSE_ABS_DIFF_NUMERATOR,TRUE_FALSE_ABS_DIFF_DENOMINATOR,TRUE_FALSE_ABS_DIFF_FRACTION,BEST_TIE_COUNT,TRUE_IN_BEST_TIES,MAX_ABS_DELTA_SIGNED_MIN_VALUE,MAX_ABS_DELTA_SIGNED_MAX_VALUE,MAX_ABS_DELTA_SIGNED_MIN_NUMERATOR,MAX_ABS_DELTA_SIGNED_MAX_NUMERATOR,MAX_ABS_DELTA_SIGNED_MIN_FRACTION,MAX_ABS_DELTA_SIGNED_MAX_FRACTION,MIN_ABS_DELTA_VALUE,MIN_ABS_DELTA_NUMERATOR,MIN_ABS_DELTA_DENOMINATOR,MIN_ABS_DELTA_FRACTION,LAST4_PREFIX_MAX_PAIR_COUNT,LAST4_SELECTED_PREFIX_ALPHA,LAST4_SELECTED_PREFIX_BETA,LAST4_TRUE_PRODUCT_VALUE,LAST4_TRUE_PRODUCT_NUMERATOR,LAST4_TRUE_PRODUCT_DENOMINATOR,LAST4_TRUE_DELTA1_VALUE,LAST4_TRUE_DELTA1_NUMERATOR,LAST4_TRUE_DELTA2_VALUE,LAST4_TRUE_DELTA2_NUMERATOR,LAST4_TRUE_MIDDLE_MASK,LAST4_TRUE_MIDDLE_MASK_AFTER_T,LAST4_TRUE_OUTPUT_MASK,LAST4_FALSE_PRODUCT_MAX_VALUE,LAST4_FALSE_PRODUCT_MAX_NUMERATOR,LAST4_FALSE_PRODUCT_DENOMINATOR,LAST4_FALSE_PRODUCT_MEAN_VALUE,LAST4_FALSE_PRODUCT_SUM_NUMERATOR,LAST4_FALSE_PRODUCT_MEAN_DENOMINATOR,LAST4_FALSE_MAX_KEY_PAIR,LAST4_FALSE_MAX_DELTA1_VALUE,LAST4_FALSE_MAX_DELTA1_NUMERATOR,LAST4_FALSE_MAX_DELTA2_VALUE,LAST4_FALSE_MAX_DELTA2_NUMERATOR,LAST4_FALSE_MAX_MIDDLE_MASK,LAST4_FALSE_MAX_MIDDLE_MASK_AFTER_T,LAST4_FALSE_MAX_OUTPUT_MASK,LAST4_FALSE_TRUE_PRODUCT_RATIO,LAST4_FALSE_MEAN_TRUE_PRODUCT_RATIO,LAST4_TIME_SEC,DELTA_TIME_SEC,RECOVERY_TIME_SEC,TOTAL_TIME_SEC\n"
         );
         fflush(summary_csv);
     }
@@ -1719,6 +2332,7 @@ int main(int argc, char **argv) {
     fprintf(meta, "backend_mode=%s\n", backend_mode_name(config.backend_mode));
     fprintf(meta, "active_backend=%s\n", backend_mode_name(active_backend));
     fprintf(meta, "cuda_threshold_count=%" PRIu32 "\n", config.cuda_threshold_count);
+    fprintf(meta, "last4_metric=%s\n", config.enable_last4_metric ? "yes" : "no");
     fprintf(meta, "cuda_available=%s\n", cuda_info.available ? "yes" : "no");
     if (cuda_info.status[0] != '\0') {
         fprintf(meta, "cuda_status=%s\n", cuda_info.status);
@@ -1734,6 +2348,7 @@ int main(int argc, char **argv) {
     printf("Sampling: %s\n", sample_mode_name(&config));
     printf("Threads: %" PRIu32 "\n", config.thread_count);
     printf("Backend: requested=%s active=%s\n", backend_mode_name(config.backend_mode), backend_mode_name(active_backend));
+    printf("Last4 tail metric: %s\n", config.enable_last4_metric ? "enabled" : "disabled");
     if (cuda_info.status[0] != '\0') {
         printf("CUDA status: %s\n", cuda_info.status);
     }

@@ -128,6 +128,25 @@ def main() -> int:
         "RECOVERY_TIME_MEAN_SEC": f"{statistics.mean(recovery_times):.4f}",
     }
 
+    if "LAST4_TRUE_PRODUCT_VALUE" in rows[0]:
+        last4_true_products = [float(row["LAST4_TRUE_PRODUCT_VALUE"]) for row in rows]
+        last4_false_max_products = [float(row["LAST4_FALSE_PRODUCT_MAX_VALUE"]) for row in rows]
+        last4_false_mean_products = [float(row["LAST4_FALSE_PRODUCT_MEAN_VALUE"]) for row in rows]
+        last4_false_true_ratios = [float(row["LAST4_FALSE_TRUE_PRODUCT_RATIO"]) for row in rows]
+        last4_false_mean_true_ratios = [float(row["LAST4_FALSE_MEAN_TRUE_PRODUCT_RATIO"]) for row in rows]
+        last4_times = [float(row["LAST4_TIME_SEC"]) for row in rows]
+        aggregate_row.update(
+            {
+                "MEAN_LAST4_TRUE_PRODUCT_VALUE": f"{statistics.mean(last4_true_products):.12f}",
+                "MEAN_LAST4_FALSE_PRODUCT_MAX_VALUE": f"{statistics.mean(last4_false_max_products):.12f}",
+                "MEAN_LAST4_FALSE_PRODUCT_MEAN_VALUE": f"{statistics.mean(last4_false_mean_products):.12f}",
+                "MAX_LAST4_FALSE_PRODUCT_MAX_VALUE": f"{max(last4_false_max_products):.12f}",
+                "MEAN_LAST4_FALSE_TRUE_PRODUCT_RATIO": f"{statistics.mean(last4_false_true_ratios):.12f}",
+                "MEAN_LAST4_FALSE_MEAN_TRUE_PRODUCT_RATIO": f"{statistics.mean(last4_false_mean_true_ratios):.12f}",
+                "LAST4_TIME_MEAN_SEC": f"{statistics.mean(last4_times):.4f}",
+            }
+        )
+
     with aggregate_csv.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=list(aggregate_row.keys()))
         writer.writeheader()
@@ -157,6 +176,18 @@ def main() -> int:
         f"TOTAL_TIME_SUM_SEC,{aggregate_row['TOTAL_TIME_SUM_SEC']}",
         f"TOTAL_TIME_MEAN_SEC,{aggregate_row['TOTAL_TIME_MEAN_SEC']}",
     ]
+    if "MEAN_LAST4_TRUE_PRODUCT_VALUE" in aggregate_row:
+        lines.extend(
+            [
+                f"MEAN_LAST4_TRUE_PRODUCT,{aggregate_row['MEAN_LAST4_TRUE_PRODUCT_VALUE']}",
+                f"MEAN_LAST4_FALSE_PRODUCT_MAX,{aggregate_row['MEAN_LAST4_FALSE_PRODUCT_MAX_VALUE']}",
+                f"MEAN_LAST4_FALSE_PRODUCT_MEAN,{aggregate_row['MEAN_LAST4_FALSE_PRODUCT_MEAN_VALUE']}",
+                f"MAX_LAST4_FALSE_PRODUCT_MAX,{aggregate_row['MAX_LAST4_FALSE_PRODUCT_MAX_VALUE']}",
+                f"MEAN_LAST4_FALSE_TRUE_PRODUCT_RATIO,{aggregate_row['MEAN_LAST4_FALSE_TRUE_PRODUCT_RATIO']}",
+                f"MEAN_LAST4_FALSE_MEAN_TRUE_PRODUCT_RATIO,{aggregate_row['MEAN_LAST4_FALSE_MEAN_TRUE_PRODUCT_RATIO']}",
+                f"LAST4_TIME_MEAN_SEC,{aggregate_row['LAST4_TIME_MEAN_SEC']}",
+            ]
+        )
     aggregate_md.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return 0
 

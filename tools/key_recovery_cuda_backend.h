@@ -12,6 +12,12 @@ extern "C" {
 typedef struct {
     uint16_t alpha;
     uint16_t beta;
+    int32_t signed_correlation;
+} PrefixMaxPair;
+
+typedef struct {
+    uint16_t alpha;
+    uint16_t beta;
     float delta;
     int32_t signed_correlation;
     int32_t abs_coeff;
@@ -19,6 +25,9 @@ typedef struct {
     uint32_t tol_pair_count;
     int32_t tol_signed_min;
     int32_t tol_signed_max;
+    PrefixMaxPair *exact_max_pairs;
+    uint32_t exact_max_pair_count;
+    bool exact_max_pairs_truncated;
 } PrefixSpectrum;
 
 typedef enum {

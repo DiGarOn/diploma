@@ -5,6 +5,7 @@
 #include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
@@ -301,6 +302,49 @@ __global__ static void summarize_kernel(
     }
 }
 
+__global__ static void collect_exact_pairs_kernel(
+    const int *f_buffer,
+    int beta,
+    int target_abs,
+    PrefixMaxPair *pairs,
+    unsigned int *pair_count,
+    unsigned int pair_capacity
+) {
+    uint32_t alpha = (uint32_t)(blockIdx.x * blockDim.x + threadIdx.x + 1u);
+    if (alpha >= 65536u) {
+        return;
+    }
+
+    int coeff = f_buffer[alpha];
+    int abs_coeff = coeff < 0 ? -coeff : coeff;
+    if (abs_coeff == target_abs) {
+        unsigned int index = atomicAdd(pair_count, 1u);
+        if (index < pair_capacity) {
+            pairs[index].alpha = (uint16_t)alpha;
+            pairs[index].beta = (uint16_t)beta;
+            pairs[index].signed_correlation = -coeff;
+        }
+    }
+}
+
+static int compare_prefix_max_pair_host(const void *left_ptr, const void *right_ptr) {
+    const PrefixMaxPair *left = (const PrefixMaxPair *)left_ptr;
+    const PrefixMaxPair *right = (const PrefixMaxPair *)right_ptr;
+    if (left->beta < right->beta) {
+        return -1;
+    }
+    if (left->beta > right->beta) {
+        return 1;
+    }
+    if (left->alpha < right->alpha) {
+        return -1;
+    }
+    if (left->alpha > right->alpha) {
+        return 1;
+    }
+    return 0;
+}
+
 static bool spectrum_is_better_host(
     int candidate_abs,
     uint16_t candidate_alpha,
@@ -409,13 +453,17 @@ extern "C" int key_recovery_cuda_compute_prefix_spectrum(
     uint16_t *d_lookup = NULL;
     int *d_f_buffer = NULL;
     DeviceBetaSummary *d_summaries = NULL;
+    PrefixMaxPair *d_exact_pairs = NULL;
+    unsigned int *d_exact_pair_count = NULL;
     DeviceBetaSummary host_summaries[batch_size_max];
+    DeviceBetaSummary *all_summaries = NULL;
     PrefixSpectrum result = {0};
     int global_best_abs = -1;
     uint32_t global_exact_pair_count = 0;
     uint32_t global_tol_pair_count = 0;
     int32_t global_tol_signed_min = INT_MAX;
     int32_t global_tol_signed_max = INT_MIN;
+    PrefixMaxPair *exact_pairs = NULL;
     double started_at = 0.0;
     cudaError_t error_code;
 
@@ -458,6 +506,11 @@ extern "C" int key_recovery_cuda_compute_prefix_spectrum(
     error_code = cudaMalloc((void **)&d_summaries, (size_t)batch_size_max * sizeof(DeviceBetaSummary));
     if (error_code != cudaSuccess) {
         set_cuda_error(error_buf, error_buf_size, "cudaMalloc(d_summaries)", error_code);
+        goto fail;
+    }
+    all_summaries = (DeviceBetaSummary *)calloc(65535u, sizeof(DeviceBetaSummary));
+    if (!all_summaries) {
+        set_error(error_buf, error_buf_size, "calloc(all_summaries) failed");
         goto fail;
     }
 
@@ -515,6 +568,7 @@ extern "C" int key_recovery_cuda_compute_prefix_spectrum(
 
         for (int i = 0; i < batch_size; i++) {
             const DeviceBetaSummary *summary = &host_summaries[i];
+            all_summaries[(beta_start - 1) + i] = *summary;
 
             if (summary->best_abs > global_best_abs) {
                 global_best_abs = summary->best_abs;
@@ -590,6 +644,100 @@ extern "C" int key_recovery_cuda_compute_prefix_spectrum(
     result.tol_pair_count = global_tol_pair_count;
     result.tol_signed_min = (global_tol_signed_min == INT_MAX) ? 0 : global_tol_signed_min;
     result.tol_signed_max = (global_tol_signed_max == INT_MIN) ? 0 : global_tol_signed_max;
+    result.exact_max_pair_count = global_exact_pair_count;
+    result.exact_max_pairs_truncated = false;
+
+    if (global_exact_pair_count > 0) {
+        unsigned int collected_count = 0;
+        exact_pairs = (PrefixMaxPair *)calloc(global_exact_pair_count, sizeof(PrefixMaxPair));
+        if (!exact_pairs) {
+            set_error(error_buf, error_buf_size, "calloc(exact_pairs) failed");
+            goto fail;
+        }
+        error_code = cudaMalloc((void **)&d_exact_pairs, (size_t)global_exact_pair_count * sizeof(PrefixMaxPair));
+        if (error_code != cudaSuccess) {
+            set_cuda_error(error_buf, error_buf_size, "cudaMalloc(d_exact_pairs)", error_code);
+            goto fail;
+        }
+        error_code = cudaMalloc((void **)&d_exact_pair_count, sizeof(unsigned int));
+        if (error_code != cudaSuccess) {
+            set_cuda_error(error_buf, error_buf_size, "cudaMalloc(d_exact_pair_count)", error_code);
+            goto fail;
+        }
+        error_code = cudaMemset(d_exact_pair_count, 0, sizeof(unsigned int));
+        if (error_code != cudaSuccess) {
+            set_cuda_error(error_buf, error_buf_size, "cudaMemset(d_exact_pair_count)", error_code);
+            goto fail;
+        }
+
+        for (int beta = 1; beta < 65536; beta++) {
+            const DeviceBetaSummary *summary = &all_summaries[beta - 1];
+            if (summary->best_abs != global_best_abs) {
+                continue;
+            }
+
+            dim3 init_grid((65536u + 255u) / 256u, 1u, 1u);
+            init_signs_kernel<<<init_grid, 256>>>(d_lookup, d_f_buffer, beta, 1);
+            error_code = cudaGetLastError();
+            if (error_code != cudaSuccess) {
+                set_cuda_error(error_buf, error_buf_size, "init_signs_kernel collect launch", error_code);
+                goto fail;
+            }
+
+            for (int len = 1; len < 65536; len <<= 1) {
+                uint32_t blocks = (32768u + 255u) / 256u;
+                fwt_stage_kernel<<<blocks, 256>>>(d_f_buffer, 1, len);
+                error_code = cudaGetLastError();
+                if (error_code != cudaSuccess) {
+                    set_cuda_error(error_buf, error_buf_size, "fwt_stage_kernel collect launch", error_code);
+                    goto fail;
+                }
+            }
+
+            collect_exact_pairs_kernel<<<256, 256>>>(
+                d_f_buffer,
+                beta,
+                global_best_abs,
+                d_exact_pairs,
+                d_exact_pair_count,
+                global_exact_pair_count
+            );
+            error_code = cudaGetLastError();
+            if (error_code != cudaSuccess) {
+                set_cuda_error(error_buf, error_buf_size, "collect_exact_pairs_kernel launch", error_code);
+                goto fail;
+            }
+        }
+
+        error_code = cudaMemcpy(
+            &collected_count,
+            d_exact_pair_count,
+            sizeof(unsigned int),
+            cudaMemcpyDeviceToHost
+        );
+        if (error_code != cudaSuccess) {
+            set_cuda_error(error_buf, error_buf_size, "cudaMemcpy(d_exact_pair_count)", error_code);
+            goto fail;
+        }
+        if (collected_count != global_exact_pair_count) {
+            set_error(error_buf, error_buf_size, "Collected prefix max pair count mismatch");
+            goto fail;
+        }
+        error_code = cudaMemcpy(
+            exact_pairs,
+            d_exact_pairs,
+            (size_t)global_exact_pair_count * sizeof(PrefixMaxPair),
+            cudaMemcpyDeviceToHost
+        );
+        if (error_code != cudaSuccess) {
+            set_cuda_error(error_buf, error_buf_size, "cudaMemcpy(exact_pairs)", error_code);
+            goto fail;
+        }
+        qsort(exact_pairs, global_exact_pair_count, sizeof(PrefixMaxPair), compare_prefix_max_pair_host);
+        result.exact_max_pairs = exact_pairs;
+        exact_pairs = NULL;
+    }
+
     *out = result;
     if (elapsed_sec) {
         *elapsed_sec = now_sec_cuda() - started_at;
@@ -598,11 +746,19 @@ extern "C" int key_recovery_cuda_compute_prefix_spectrum(
     cudaFree(d_lookup);
     cudaFree(d_f_buffer);
     cudaFree(d_summaries);
+    cudaFree(d_exact_pairs);
+    cudaFree(d_exact_pair_count);
+    free(all_summaries);
     return 0;
 
 fail:
     cudaFree(d_lookup);
     cudaFree(d_f_buffer);
     cudaFree(d_summaries);
+    cudaFree(d_exact_pairs);
+    cudaFree(d_exact_pair_count);
+    free(all_summaries);
+    free(exact_pairs);
+    free(result.exact_max_pairs);
     return -1;
 }

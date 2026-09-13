@@ -69,7 +69,7 @@ def build_false_delta_distribution(summary_path: Path, series_label: str) -> dic
 
 
 def build_readable_overview_row(aggregate_row: dict[str, str]) -> dict[str, str]:
-    return {
+    row = {
         "SERIES": aggregate_row["SERIES_LABEL"],
         "RUNS": aggregate_row["ITERATION_COUNT"],
         "TOP1": aggregate_row["TOP1_COUNT"],
@@ -93,6 +93,18 @@ def build_readable_overview_row(aggregate_row: dict[str, str]) -> dict[str, str]
         "FALSE_DELTA_ABS_MAX_KEY_COUNT_MAX_TOL_1E_7": aggregate_row["FALSE_DELTA_ABS_MAX_KEY_COUNT_MAX_TOL_1E_7"],
         "TOTAL_TIME_MEAN_SEC": aggregate_row["TOTAL_TIME_MEAN_SEC"],
     }
+    if "MEAN_LAST4_TRUE_PRODUCT_VALUE" in aggregate_row:
+        row.update(
+            {
+                "MEAN_LAST4_TRUE_PRODUCT": aggregate_row["MEAN_LAST4_TRUE_PRODUCT_VALUE"],
+                "MEAN_LAST4_FALSE_PRODUCT_MAX": aggregate_row["MEAN_LAST4_FALSE_PRODUCT_MAX_VALUE"],
+                "MEAN_LAST4_FALSE_PRODUCT_MEAN": aggregate_row["MEAN_LAST4_FALSE_PRODUCT_MEAN_VALUE"],
+                "MEAN_LAST4_FALSE_TRUE_PRODUCT_RATIO": aggregate_row["MEAN_LAST4_FALSE_TRUE_PRODUCT_RATIO"],
+                "MEAN_LAST4_FALSE_MEAN_TRUE_PRODUCT_RATIO": aggregate_row["MEAN_LAST4_FALSE_MEAN_TRUE_PRODUCT_RATIO"],
+                "LAST4_TIME_MEAN_SEC": aggregate_row["LAST4_TIME_MEAN_SEC"],
+            }
+        )
+    return row
 
 
 def render_pdf(markdown_path: Path, pdf_path: Path) -> str | None:
@@ -225,9 +237,50 @@ def build_report_markdown(
     lines.append("- adaptive_m10: режим material / 10 по delta^2.")
     lines.append("- full_material: прогон по полному материалу.")
     lines.append("")
+    lines.append(
+        "В текущей конфигурации серии запускаются на разных seed, поэтому наборы ключей "
+        "между adaptive_m1, adaptive_m5, adaptive_m10 и full_material различаются. "
+        "Сравнение серий является статистическим сравнением режимов на независимых наборах ключей."
+    )
+    lines.append("")
+
+    lines.append("## 2. Как считаются параметры")
+    lines.append("")
+    lines.append(
+        "Один прогон соответствует одному 32-битному истинному ключу и одной выбранной паре "
+        "линейных масок `(alpha, beta)`. Для выбранного объема материала `N = SAMPLE_COUNT` "
+        "перебираются все `2^16` кандидатов последних двух ключевых байтов `(k1, k2)`."
+    )
+    lines.append("")
+    lines.append("- `SAMPLE_COUNT`: число выбранных открытых текстов `N`. В адаптивных режимах `N` считается как `ceil(m / delta_prefix^2)` с ограничением сверху `SAMPLE_CAP`; в `full_material` используется весь материал `N = 2^16`.")
+    lines.append("- `TRUE_DELTA_SIGNED`: signed-оценка bias для истинной пары последних ключевых байтов. Формула: `TRUE_SCORE / N`, где `TRUE_SCORE` - сумма `+1/-1` по выбранным текстам для истинной пары.")
+    lines.append("- `TRUE_DELTA_ABS`: модуль предыдущей величины. Формула: `abs(TRUE_SCORE) / N`; числитель - `abs(TRUE_SCORE)`, знаменатель - `N`.")
+    lines.append("- `FALSE_DELTA_SIGNED_MEAN`: среднее signed-значение по ложным кандидатам. Формула: `sum(FALSE_SCORE_j) / (N * 65535)`, где `j` пробегает все ложные пары `(k1, k2)`.")
+    lines.append("- `FALSE_DELTA_ABS_MEAN`: среднее значение `|delta|` по ложным кандидатам. Формула: `sum(abs(FALSE_SCORE_j)) / (N * 65535)`.")
+    lines.append("- `FALSE_DELTA_ABS_MAX`: максимум `|delta|` по ложным кандидатам внутри одного прогона. Формула: `max_j abs(FALSE_SCORE_j) / N` по всем ложным `j`.")
+    lines.append("- `TRUE_RANK`: место истинной пары среди всех `2^16` кандидатов при сортировке по убыванию `|score|`. Ранг равен `1 +` число кандидатов, у которых `|score| > |TRUE_SCORE|`.")
+    lines.append("- `TOP1`, `TOP3`, `TOP32`: число прогонов, где истинная пара попала соответственно в top-1, top-3 или top-32 по `|score|`.")
+    lines.append("- `MEAN_TRUE_DELTA_ABS`: среднее `TRUE_DELTA_ABS` по всем прогонам серии.")
+    lines.append("- `MEAN_FALSE_DELTA_SIGNED` и `MEAN_FALSE_DELTA_ABS`: средние значения соответствующих per-run метрик по всем прогонам серии.")
+    lines.append("- `MEAN_TRUE_FALSE_ABS_RATIO`: среднее по прогонам отношение `abs(TRUE_SCORE) * 65535 / sum(abs(FALSE_SCORE_j))`, то есть `|delta_true| / mean(|delta_false|)`.")
+    lines.append("- `MEAN_TRUE_FALSE_ABS_DIFF`: средняя по прогонам разность `|delta_true| - mean(|delta_false|)`.")
+    lines.append("- `TRUE_DELTA_ABS_MAX`: максимум `TRUE_DELTA_ABS` по всем прогонам серии. Это максимум только по истинному ключу в каждом прогоне, а не максимум по всем кандидатам.")
+    lines.append("- `FALSE_DELTA_ABS_MAX` в агрегате: максимум per-run величины `FALSE_DELTA_ABS_MAX` по всем прогонам серии.")
+    lines.append("- `*_EXPERIMENT_COUNT_TOL_1E_7`: число прогонов серии, где соответствующий максимум достигается с точностью округления до `1e-7`.")
+    lines.append("- `FALSE_DELTA_ABS_MAX_KEY_COUNT_MEAN_TOL_1E_7`: среднее по прогонам число ложных кандидатов, у которых `|delta_false|` совпадает с per-run максимумом после округления до `1e-7`.")
+    lines.append("- `FALSE_DELTA_ABS_MAX_KEY_COUNT_MAX_TOL_1E_7`: максимальное такое число ложных кандидатов среди всех прогонов серии.")
+    lines.append("- `LAST4_PREFIX_MAX_PAIR_COUNT`: число точных prefix-максимумов `(alpha, beta)`, которые были перебраны для tail-метрики. Если максимумов несколько, хвост считается для каждого из них.")
+    lines.append("- `LAST4_SELECTED_PREFIX_ALPHA` и `LAST4_SELECTED_PREFIX_BETA`: та prefix-пара из всех точных максимумов, на которой получился выбранный максимальный хвостовой результат.")
+    lines.append("- `LAST4_TRUE_PRODUCT`: дополнительная tail-метрика для последних 4 итераций. Для каждого точного prefix-максимума `(alpha, beta)` первые две хвостовые итерации считаются только на истинном ключе, затем применяется перестановка `T`, после чего находится максимум второй двухраундовой части. Формула: `|delta1_true| * |delta2_true|`. В CSV сохраняется результат выбранной prefix-пары.")
+    lines.append("- `LAST4_FALSE_PRODUCT_MAX`: максимум `|delta1_true| * |delta2_false|` по ложным кандидатам второй хвостовой части. Первая часть `delta1_true` остается посчитанной только на истинном ключе. Если prefix-максимумов несколько, сохраняется максимальный хвостовой результат среди всех таких prefix-пар.")
+    lines.append("- `LAST4_FALSE_PRODUCT_MEAN`: среднее значение `|delta1_true| * |delta2_false|` по всем ложным кандидатам второй хвостовой части.")
+    lines.append("- `LAST4_FALSE_TRUE_PRODUCT_RATIO`: отношение `LAST4_FALSE_PRODUCT_MAX / LAST4_TRUE_PRODUCT`.")
+    lines.append("- `LAST4_FALSE_MEAN_TRUE_PRODUCT_RATIO`: отношение `LAST4_FALSE_PRODUCT_MEAN / LAST4_TRUE_PRODUCT`.")
+    lines.append("- `TOTAL_TIME_MEAN_SEC`: среднее время одного прогона серии в секундах.")
+    lines.append("")
 
     if verification_row:
-        lines.append("## 2. Проверка TH1H2T")
+        lines.append("## 3. Проверка TH1H2T")
         lines.append("")
         lines.append(f"- ключ: {verification_row['KEY']}")
         lines.append(f"- проверено открытых текстов: {verification_row['TOTAL_PLAINTEXTS']}")
@@ -235,7 +288,7 @@ def build_report_markdown(
         lines.append(f"- статус: {verification_row['STATUS']}")
         lines.append("")
 
-    lines.append("## 3. Основные результаты по сериям")
+    lines.append("## 4. Основные результаты по сериям")
     lines.append("")
     for series_name, _, title in SERIES_LAYOUT:
         aggregate_row = agg_by_series.get(series_name)
@@ -261,6 +314,13 @@ def build_report_markdown(
         lines.append(f"- число экспериментов, где максимум max |delta_false| достигался с точностью до 7 знака: {aggregate_row['FALSE_DELTA_ABS_MAX_EXPERIMENT_COUNT_TOL_1E_7']}")
         lines.append(f"- среднее число ложных ключей, на которых достигался max |delta_false| с точностью до 7 знака: {aggregate_row['FALSE_DELTA_ABS_MAX_KEY_COUNT_MEAN_TOL_1E_7']}")
         lines.append(f"- максимальное число ложных ключей, на которых достигался max |delta_false| с точностью до 7 знака: {aggregate_row['FALSE_DELTA_ABS_MAX_KEY_COUNT_MAX_TOL_1E_7']}")
+        if "MEAN_LAST4_TRUE_PRODUCT_VALUE" in aggregate_row:
+            lines.append(f"- среднее last4 true product: {aggregate_row['MEAN_LAST4_TRUE_PRODUCT_VALUE']}")
+            lines.append(f"- среднее last4 max false product: {aggregate_row['MEAN_LAST4_FALSE_PRODUCT_MAX_VALUE']}")
+            lines.append(f"- среднее last4 mean false product: {aggregate_row['MEAN_LAST4_FALSE_PRODUCT_MEAN_VALUE']}")
+            lines.append(f"- среднее отношение last4 max false / true: {aggregate_row['MEAN_LAST4_FALSE_TRUE_PRODUCT_RATIO']}")
+            lines.append(f"- среднее отношение last4 mean false / true: {aggregate_row['MEAN_LAST4_FALSE_MEAN_TRUE_PRODUCT_RATIO']}")
+            lines.append(f"- среднее время расчета last4-метрики, сек: {aggregate_row['LAST4_TIME_MEAN_SEC']}")
         lines.append(f"- среднее время одного прогона, сек: {aggregate_row['TOTAL_TIME_MEAN_SEC']}")
         if dist_row:
             lines.append(
@@ -277,7 +337,7 @@ def build_report_markdown(
             )
         lines.append("")
 
-    lines.append("## 4. Где лежат материалы для отправки")
+    lines.append("## 5. Где лежат материалы для отправки")
     lines.append("")
     lines.append("- полные таблицы по сериям: series_tables/*/01_summary.csv и соответствующие .xlsx;")
     lines.append("- агрегаты по сериям: series_tables/*/02_aggregate_report.csv;")

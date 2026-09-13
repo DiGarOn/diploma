@@ -20,6 +20,7 @@ FULL_M=100
 BACKEND=auto
 CUDA_THRESHOLD_COUNT=128
 SUITE_DIR=""
+ONLY_SERIES=""
 CURRENT_PHASE="initializing"
 SUITE_SUCCESS=0
 SUITE_PROGRESS_LOG=""
@@ -32,6 +33,10 @@ phase=$CURRENT_PHASE
 updated_at=$(date '+%Y-%m-%d %H:%M:%S %Z')
 count=$COUNT
 seed=$SEED
+adaptive_m1_seed=$((SEED + 4000037))
+adaptive_m5_seed=$((SEED + 5000011))
+adaptive_m10_seed=$((SEED + 6000011))
+full_material_seed=$((SEED + 7000003))
 top=$TOP
 threads=$THREADS
 sample_cap=$SAMPLE_CAP
@@ -39,6 +44,7 @@ m1=$M1
 m5=$M5
 m10=$M10
 full_m=$FULL_M
+only_series=${ONLY_SERIES:-all}
 suite_dir=$SUITE_DIR
 EOF
 }
@@ -79,13 +85,14 @@ EOF
 }
 
 write_suite_progress_snapshot() {
-    local adaptive_m1_done adaptive_m5_done adaptive_m10_done full_material_done total_done total_expected
+    local adaptive_m1_done adaptive_m5_done adaptive_m10_done full_material_done total_done total_expected selected_count
     adaptive_m1_done=$(count_completed_iterations "$SUITE_DIR/adaptive_m1/summary.csv")
     adaptive_m5_done=$(count_completed_iterations "$SUITE_DIR/adaptive_m5/summary.csv")
     adaptive_m10_done=$(count_completed_iterations "$SUITE_DIR/adaptive_m10/summary.csv")
     full_material_done=$(count_completed_iterations "$SUITE_DIR/full_material/summary.csv")
     total_done=$((adaptive_m1_done + adaptive_m5_done + adaptive_m10_done + full_material_done))
-    total_expected=$((COUNT * 4))
+    selected_count=$(selected_series_count)
+    total_expected=$((COUNT * selected_count))
 
     cat > "$SUITE_DIR/suite_progress.txt" <<EOF
 updated_at=$(date '+%Y-%m-%d %H:%M:%S %Z')
@@ -97,6 +104,22 @@ full_material_completed=$full_material_done/$COUNT
 total_completed=$total_done/$total_expected
 log_file=$SUITE_DIR/background_run.log
 EOF
+}
+
+should_run_series() {
+    local label="$1"
+    if [ -z "$ONLY_SERIES" ]; then
+        return 0
+    fi
+    [ "$ONLY_SERIES" = "$label" ]
+}
+
+selected_series_count() {
+    if [ -n "$ONLY_SERIES" ]; then
+        echo "1"
+    else
+        echo "4"
+    fi
 }
 
 handle_exit() {
@@ -173,6 +196,18 @@ while [ $# -gt 0 ]; do
             REFERENCE_OVERVIEW="$2"
             shift 2
             ;;
+        --only-series)
+            ONLY_SERIES="$2"
+            case "$ONLY_SERIES" in
+                adaptive_m1|adaptive_m5|adaptive_m10|full_material)
+                    ;;
+                *)
+                    echo "Неизвестная серия для --only-series: $ONLY_SERIES"
+                    exit 1
+                    ;;
+            esac
+            shift 2
+            ;;
         *)
             echo "Неизвестный аргумент: $1"
             exit 1
@@ -193,6 +228,10 @@ log_suite_progress "suite started; count=$COUNT threads=$THREADS suite_dir=$SUIT
 cat > "$SUITE_DIR/suite_config.txt" <<EOF
 count=$COUNT
 seed=$SEED
+adaptive_m1_seed=$((SEED + 4000037))
+adaptive_m5_seed=$((SEED + 5000011))
+adaptive_m10_seed=$((SEED + 6000011))
+full_material_seed=$((SEED + 7000003))
 top=$TOP
 threads=$THREADS
 sample_cap=$SAMPLE_CAP
@@ -200,6 +239,7 @@ m1=$M1
 m5=$M5
 m10=$M10
 full_m=$FULL_M
+only_series=${ONLY_SERIES:-all}
 backend=$BACKEND
 cuda_threshold_count=$CUDA_THRESHOLD_COUNT
 reference_overview=$REFERENCE_OVERVIEW
@@ -211,6 +251,9 @@ echo "════════════════════════�
 echo "Suite dir: $SUITE_DIR"
 echo "Count: $COUNT"
 echo "Threads: $THREADS"
+if [ -n "$ONLY_SERIES" ]; then
+    echo "Only series: $ONLY_SERIES"
+fi
 echo ""
 
 if [ -f "$REFERENCE_OVERVIEW" ]; then
@@ -249,72 +292,55 @@ run_series() {
     local label="$1"
     shift
     local out_dir="$SUITE_DIR/$label"
-    local reuse_prefix_summary="${REUSE_PREFIX_SUMMARY:-}"
+    local series_seed="$SEED"
+    case "$label" in
+        adaptive_m1)
+            series_seed=$((SEED + 4000037))
+            ;;
+        adaptive_m5)
+            series_seed=$((SEED + 5000011))
+            ;;
+        adaptive_m10)
+            series_seed=$((SEED + 6000011))
+            ;;
+        full_material)
+            series_seed=$((SEED + 7000003))
+            ;;
+    esac
     mkdir -p "$out_dir"
     write_series_progress_stub "$label" "$out_dir"
 
     CURRENT_PHASE="running_$label"
     write_status "running"
     write_suite_progress_snapshot
-    log_suite_progress "starting series $label"
+    log_suite_progress "starting series $label; seed=$series_seed"
 
     echo "---- running $label ----"
     if [ -f "$out_dir/summary.csv" ]; then
-        if [ -n "$reuse_prefix_summary" ]; then
-            "$BUILD_DIR/key_recovery_experiment" \
-                --output-dir "$out_dir" \
-                --resume \
-                --series-label "$label" \
-                --count "$COUNT" \
-                --seed "$SEED" \
-                --top "$TOP" \
-                --threads "$THREADS" \
-                --sample-cap "$SAMPLE_CAP" \
-                --backend "$BACKEND" \
-                --cuda-threshold-count "$CUDA_THRESHOLD_COUNT" \
-                --reuse-prefix-summary "$reuse_prefix_summary" \
-                "$@"
-        else
-            "$BUILD_DIR/key_recovery_experiment" \
-                --output-dir "$out_dir" \
-                --resume \
-                --series-label "$label" \
-                --count "$COUNT" \
-                --seed "$SEED" \
-                --top "$TOP" \
-                --threads "$THREADS" \
-                --sample-cap "$SAMPLE_CAP" \
-                --backend "$BACKEND" \
-                --cuda-threshold-count "$CUDA_THRESHOLD_COUNT" \
-                "$@"
-        fi
+        "$BUILD_DIR/key_recovery_experiment" \
+            --output-dir "$out_dir" \
+            --resume \
+            --series-label "$label" \
+            --count "$COUNT" \
+            --seed "$series_seed" \
+            --top "$TOP" \
+            --threads "$THREADS" \
+            --sample-cap "$SAMPLE_CAP" \
+            --backend "$BACKEND" \
+            --cuda-threshold-count "$CUDA_THRESHOLD_COUNT" \
+            "$@"
     else
-        if [ -n "$reuse_prefix_summary" ]; then
-            "$BUILD_DIR/key_recovery_experiment" \
-                --output-dir "$out_dir" \
-                --series-label "$label" \
-                --count "$COUNT" \
-                --seed "$SEED" \
-                --top "$TOP" \
-                --threads "$THREADS" \
-                --sample-cap "$SAMPLE_CAP" \
-                --backend "$BACKEND" \
-                --cuda-threshold-count "$CUDA_THRESHOLD_COUNT" \
-                --reuse-prefix-summary "$reuse_prefix_summary" \
-                "$@"
-        else
-            "$BUILD_DIR/key_recovery_experiment" \
-                --output-dir "$out_dir" \
-                --series-label "$label" \
-                --count "$COUNT" \
-                --seed "$SEED" \
-                --top "$TOP" \
-                --threads "$THREADS" \
-                --sample-cap "$SAMPLE_CAP" \
-                --backend "$BACKEND" \
-                --cuda-threshold-count "$CUDA_THRESHOLD_COUNT" \
-                "$@"
-        fi
+        "$BUILD_DIR/key_recovery_experiment" \
+            --output-dir "$out_dir" \
+            --series-label "$label" \
+            --count "$COUNT" \
+            --seed "$series_seed" \
+            --top "$TOP" \
+            --threads "$THREADS" \
+            --sample-cap "$SAMPLE_CAP" \
+            --backend "$BACKEND" \
+            --cuda-threshold-count "$CUDA_THRESHOLD_COUNT" \
+            "$@"
     fi
 
     CURRENT_PHASE="summarizing_$label"
@@ -325,10 +351,18 @@ run_series() {
     log_suite_progress "series $label finished"
 }
 
-run_series "adaptive_m1" --m "$M1"
-REUSE_PREFIX_SUMMARY="$SUITE_DIR/adaptive_m1/summary.csv" run_series "adaptive_m5" --m "$M5"
-REUSE_PREFIX_SUMMARY="$SUITE_DIR/adaptive_m1/summary.csv" run_series "adaptive_m10" --m "$M10"
-REUSE_PREFIX_SUMMARY="$SUITE_DIR/adaptive_m1/summary.csv" run_series "full_material" --full-material --m "$FULL_M"
+if should_run_series "adaptive_m1"; then
+    run_series "adaptive_m1" --m "$M1"
+fi
+if should_run_series "adaptive_m5"; then
+    run_series "adaptive_m5" --m "$M5"
+fi
+if should_run_series "adaptive_m10"; then
+    run_series "adaptive_m10" --m "$M10"
+fi
+if should_run_series "full_material"; then
+    run_series "full_material" --full-material --m "$FULL_M"
+fi
 
 CURRENT_PHASE="finalizing"
 write_suite_progress_snapshot
