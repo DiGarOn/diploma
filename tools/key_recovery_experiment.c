@@ -119,6 +119,7 @@ typedef struct {
     const char *reuse_prefix_summary;
     KeyRecoveryBackend backend_mode;
     uint32_t cuda_threshold_count;
+    KeyRecoveryKeyMix key_mix;
     bool enable_last4_metric;
 } Config;
 
@@ -200,6 +201,16 @@ static const char *backend_mode_name(KeyRecoveryBackend backend) {
     }
 }
 
+static const char *key_mix_name(KeyRecoveryKeyMix key_mix) {
+    switch (key_mix) {
+        case KEY_RECOVERY_KEY_MIX_XOR:
+            return "xor";
+        case KEY_RECOVERY_KEY_MIX_MODADD:
+        default:
+            return "modadd";
+    }
+}
+
 static void write_iteration_progress(
     const Config *config,
     uint32_t iteration_index,
@@ -226,6 +237,7 @@ static void write_iteration_progress(
     if (progress_file) {
         fprintf(progress_file, "updated_at=%s\n", timestamp_buf);
         fprintf(progress_file, "series_label=%s\n", config->series_label ? config->series_label : "default");
+        fprintf(progress_file, "key_mix=%s\n", key_mix_name(config->key_mix));
         fprintf(progress_file, "completed_iterations=%" PRIu32 "\n", iteration_index + 1);
         fprintf(progress_file, "total_iterations=%" PRIu32 "\n", config->iterations);
         fprintf(progress_file, "progress_percent=%.4f\n", percent);
@@ -320,14 +332,17 @@ static void split_key_be(uint32_t raw_key, uint8_t key[4]) {
     key[3] = (uint8_t)(raw_key & 0xFFu);
 }
 
-static void init_tables(void) {
+static void init_tables(KeyRecoveryKeyMix key_mix) {
     for (int v = 0; v < 256; v++) {
         PARITY8_TABLE[v] = (uint8_t)__builtin_parity((unsigned)v);
     }
 
     for (int k = 0; k < 256; k++) {
         for (int x = 0; x < 256; x++) {
-            ROUND_TABLE[k][x] = PREP_PHASE_TABLE[(x + k) & 0xFF];
+            uint8_t mixed = key_mix == KEY_RECOVERY_KEY_MIX_XOR
+                ? (uint8_t)(x ^ k)
+                : (uint8_t)((x + k) & 0xFF);
+            ROUND_TABLE[k][x] = PREP_PHASE_TABLE[mixed];
         }
     }
 }
@@ -1286,7 +1301,7 @@ static int write_top_candidates(
 
     fprintf(
         f,
-        "RUN_ID,SERIES_LABEL,SAMPLE_MODE,SAMPLE_FACTOR_M,SAMPLE_CAP,THREAD_COUNT,SEED,ITERATION,TRUE_KEY,PREFIX_ALPHA,PREFIX_BETA,RANK,K1_GUESS,K2_GUESS,SCORE_NUMERATOR,SCORE_DENOMINATOR,SCORE_FRACTION,SCORE_VALUE,ABS_SCORE_VALUE\n"
+        "RUN_ID,SERIES_LABEL,SAMPLE_MODE,SAMPLE_FACTOR_M,SAMPLE_CAP,THREAD_COUNT,SEED,KEY_MIX,ITERATION,TRUE_KEY,PREFIX_ALPHA,PREFIX_BETA,RANK,K1_GUESS,K2_GUESS,SCORE_NUMERATOR,SCORE_DENOMINATOR,SCORE_FRACTION,SCORE_VALUE,ABS_SCORE_VALUE\n"
     );
     for (uint32_t i = 0; i < top_count; i++) {
         char score_fraction[64];
@@ -1297,7 +1312,7 @@ static int write_top_candidates(
         format_fraction_i64((int64_t)top[i].score, (uint64_t)sample_count, score_fraction, sizeof(score_fraction));
         fprintf(
             f,
-            "%s,%s,%s,%.6f,%" PRIu32 ",%" PRIu32 ",%" PRIu64 ",%" PRIu32 ",0x%08" PRIX32 ",0x%04X,0x%04X,%" PRIu32 ",0x%02X,0x%02X,%" PRId32 ",%" PRIu32 ",%s,%.10f,%.10f\n",
+            "%s,%s,%s,%.6f,%" PRIu32 ",%" PRIu32 ",%" PRIu64 ",%s,%" PRIu32 ",0x%08" PRIX32 ",0x%04X,0x%04X,%" PRIu32 ",0x%02X,0x%02X,%" PRId32 ",%" PRIu32 ",%s,%.10f,%.10f\n",
             path_basename_const(config->output_dir),
             config->series_label ? config->series_label : "default",
             sample_mode_name(config),
@@ -1305,6 +1320,7 @@ static int write_top_candidates(
             config->sample_cap,
             config->thread_count,
             config->seed,
+            key_mix_name(config->key_mix),
             iteration_index + 1,
             key,
             alpha,
@@ -1355,7 +1371,7 @@ static int write_full_candidates(
 
     fprintf(
         f,
-        "RUN_ID,SERIES_LABEL,SAMPLE_MODE,SAMPLE_FACTOR_M,SAMPLE_CAP,THREAD_COUNT,SEED,ITERATION,TRUE_KEY,PREFIX_ALPHA,PREFIX_BETA,K1_GUESS,K2_GUESS,SCORE_NUMERATOR,SCORE_DENOMINATOR,SCORE_FRACTION,SCORE_VALUE,ABS_SCORE_VALUE,IS_TRUE\n"
+        "RUN_ID,SERIES_LABEL,SAMPLE_MODE,SAMPLE_FACTOR_M,SAMPLE_CAP,THREAD_COUNT,SEED,KEY_MIX,ITERATION,TRUE_KEY,PREFIX_ALPHA,PREFIX_BETA,K1_GUESS,K2_GUESS,SCORE_NUMERATOR,SCORE_DENOMINATOR,SCORE_FRACTION,SCORE_VALUE,ABS_SCORE_VALUE,IS_TRUE\n"
     );
     for (uint32_t index = 0; index < 65536u; index++) {
         char score_fraction[64];
@@ -1365,7 +1381,7 @@ static int write_full_candidates(
         format_fraction_i64((int64_t)scores[index], (uint64_t)sample_count, score_fraction, sizeof(score_fraction));
         fprintf(
             f,
-            "%s,%s,%s,%.6f,%" PRIu32 ",%" PRIu32 ",%" PRIu64 ",%" PRIu32 ",0x%08" PRIX32 ",0x%04X,0x%04X,0x%02X,0x%02X,%" PRId32 ",%" PRIu32 ",%s,%.10f,%.10f,%s\n",
+            "%s,%s,%s,%.6f,%" PRIu32 ",%" PRIu32 ",%" PRIu64 ",%s,%" PRIu32 ",0x%08" PRIX32 ",0x%04X,0x%04X,0x%02X,0x%02X,%" PRId32 ",%" PRIu32 ",%s,%.10f,%.10f,%s\n",
             path_basename_const(config->output_dir),
             config->series_label ? config->series_label : "default",
             sample_mode_name(config),
@@ -1373,6 +1389,7 @@ static int write_full_candidates(
             config->sample_cap,
             config->thread_count,
             config->seed,
+            key_mix_name(config->key_mix),
             iteration_index + 1,
             key,
             alpha,
@@ -1429,6 +1446,7 @@ static int run_iteration(
         char cuda_error[256] = {0};
         if (key_recovery_cuda_compute_prefix_spectrum(
             key32,
+            config->key_mix,
             &spectrum,
             &result.delta_time_sec,
             cuda_error,
@@ -1665,7 +1683,7 @@ static int run_iteration(
 
         fprintf(
             summary_csv,
-            "%s,%s,%s,%.6f,%" PRIu32 ",%" PRIu32 ",%" PRIu64 ",%s,%" PRIu32 ",0x%08" PRIX32 ",0x%02X,0x%02X,0x%02X,0x%02X,0x%04X,0x%04X,%.10f,%" PRId32 ",65536,%s,%.10f,%" PRId32 ",65536,%s,%" PRIu32 ",%.10f,%.10f,%" PRIu32 ",0x%02X,0x%02X,%.10f,%" PRId32 ",%" PRIu32 ",%s,%.10f,%" PRId32 ",%" PRIu32 ",%s,%" PRIu32 ",%.10f,%" PRId64 ",%" PRIu64 ",%s,%.10f,%" PRId64 ",%" PRIu64 ",%s,%.10f,%" PRId32 ",%" PRIu32 ",%s,%" PRIu32 ",0x%02X,0x%02X,%.10f,%" PRId32 ",%" PRIu32 ",%s,%.10f,%.10f,%" PRId64 ",%" PRIu64 ",%s,%" PRIu32 ",%" PRIu32 ",%.10f,%.10f,%" PRId32 ",%" PRId32 ",%s,%s,%.10f,%" PRId32 ",%" PRIu32 ",%s,%" PRIu32 ",0x%04X,0x%04X,%.12f,%" PRIu64 ",4294967296,%.12f,%" PRIu32 ",%.12f,%" PRIu32 ",0x%04X,0x%04X,0x%04X,%.12f,%" PRIu64 ",4294967296,%.12f,%" PRIu64 ",281470681743360,0x%04X,%.12f,%" PRIu32 ",%.12f,%" PRIu32 ",0x%04X,0x%04X,0x%04X,%.12f,%.12f,%.4f,%.4f,%.4f,%.4f\n",
+            "%s,%s,%s,%.6f,%" PRIu32 ",%" PRIu32 ",%" PRIu64 ",%s,%s,%" PRIu32 ",0x%08" PRIX32 ",0x%02X,0x%02X,0x%02X,0x%02X,0x%04X,0x%04X,%.10f,%" PRId32 ",65536,%s,%.10f,%" PRId32 ",65536,%s,%" PRIu32 ",%.10f,%.10f,%" PRIu32 ",0x%02X,0x%02X,%.10f,%" PRId32 ",%" PRIu32 ",%s,%.10f,%" PRId32 ",%" PRIu32 ",%s,%" PRIu32 ",%.10f,%" PRId64 ",%" PRIu64 ",%s,%.10f,%" PRId64 ",%" PRIu64 ",%s,%.10f,%" PRId32 ",%" PRIu32 ",%s,%" PRIu32 ",0x%02X,0x%02X,%.10f,%" PRId32 ",%" PRIu32 ",%s,%.10f,%.10f,%" PRId64 ",%" PRIu64 ",%s,%" PRIu32 ",%" PRIu32 ",%.10f,%.10f,%" PRId32 ",%" PRId32 ",%s,%s,%.10f,%" PRId32 ",%" PRIu32 ",%s,%" PRIu32 ",0x%04X,0x%04X,%.12f,%" PRIu64 ",4294967296,%.12f,%" PRIu32 ",%.12f,%" PRIu32 ",0x%04X,0x%04X,0x%04X,%.12f,%" PRIu64 ",4294967296,%.12f,%" PRIu64 ",281470681743360,0x%04X,%.12f,%" PRIu32 ",%.12f,%" PRIu32 ",0x%04X,0x%04X,0x%04X,%.12f,%.12f,%.4f,%.4f,%.4f,%.4f\n",
             path_basename_const(config->output_dir),
             config->series_label ? config->series_label : "default",
             sample_mode_name(config),
@@ -1674,6 +1692,7 @@ static int run_iteration(
             config->thread_count,
             config->seed,
             config->full_material ? "yes" : "no",
+            key_mix_name(config->key_mix),
             iteration_index + 1,
             result.key,
             key[0],
@@ -1855,6 +1874,7 @@ static void print_usage(const char *argv0) {
         "  --threads N             Number of CPU threads for spectrum search\n"
         "  --backend MODE          Prefix backend: auto, cpu, cuda (default: auto)\n"
         "  --cuda-threshold-count  In auto mode use CUDA from this key count (default: 128)\n"
+        "  --key-mix MODE          Round key mixing before PREP table: modadd, xor (default: modadd)\n"
         "  --disable-last4-metric  Do not compute the approved last-4-round tail metric\n"
         "  --reuse-prefix-summary  Reuse prefix spectrum from another summary.csv\n"
         "  --resume                Continue appending to existing summary.csv\n"
@@ -1905,6 +1925,18 @@ static int parse_backend_mode(const char *value, KeyRecoveryBackend *out) {
     }
     if (strcmp(value, "cuda") == 0) {
         *out = KEY_RECOVERY_BACKEND_CUDA;
+        return 0;
+    }
+    return -1;
+}
+
+static int parse_key_mix(const char *value, KeyRecoveryKeyMix *out) {
+    if (strcmp(value, "modadd") == 0 || strcmp(value, "add") == 0 || strcmp(value, "mod") == 0) {
+        *out = KEY_RECOVERY_KEY_MIX_MODADD;
+        return 0;
+    }
+    if (strcmp(value, "xor") == 0) {
+        *out = KEY_RECOVERY_KEY_MIX_XOR;
         return 0;
     }
     return -1;
@@ -2138,6 +2170,7 @@ int main(int argc, char **argv) {
         .reuse_prefix_summary = NULL,
         .backend_mode = KEY_RECOVERY_BACKEND_AUTO,
         .cuda_threshold_count = 128,
+        .key_mix = KEY_RECOVERY_KEY_MIX_MODADD,
         .enable_last4_metric = true,
     };
     char summary_path[1024];
@@ -2214,6 +2247,11 @@ int main(int argc, char **argv) {
                 fprintf(stderr, "Некорректное значение для --cuda-threshold-count\n");
                 return 1;
             }
+        } else if (strcmp(argv[i], "--key-mix") == 0 && i + 1 < argc) {
+            if (parse_key_mix(argv[++i], &config.key_mix) != 0) {
+                fprintf(stderr, "Некорректное значение для --key-mix, ожидается modadd|xor\n");
+                return 1;
+            }
         } else if (strcmp(argv[i], "--disable-last4-metric") == 0) {
             config.enable_last4_metric = false;
         } else if (strcmp(argv[i], "--reuse-prefix-summary") == 0 && i + 1 < argc) {
@@ -2240,7 +2278,7 @@ int main(int argc, char **argv) {
         config.iterations = 1;
     }
 
-    init_tables();
+    init_tables(config.key_mix);
 
     if (select_active_backend(&config, &active_backend, &cuda_info) != 0) {
         return 1;
@@ -2303,7 +2341,7 @@ int main(int argc, char **argv) {
     if (!config.resume || start_iteration == 0) {
         fprintf(
             summary_csv,
-            "RUN_ID,SERIES_LABEL,SAMPLE_MODE,SAMPLE_FACTOR_M,SAMPLE_CAP,THREAD_COUNT,SEED,FULL_MATERIAL,ITERATION,TRUE_KEY,K4,K3,K2,K1,PREFIX_ALPHA,PREFIX_BETA,PREFIX_DELTA_ABS_VALUE,PREFIX_DELTA_ABS_NUMERATOR,PREFIX_DELTA_ABS_DENOMINATOR,PREFIX_DELTA_ABS_FRACTION,PREFIX_DELTA_SIGNED_VALUE,PREFIX_DELTA_SIGNED_NUMERATOR,PREFIX_DELTA_SIGNED_DENOMINATOR,PREFIX_DELTA_SIGNED_FRACTION,PREFIX_MAX_PAIR_COUNT_TOL_2_NEG_15,PREFIX_MAX_SIGNED_VALUE_MIN_TOL,PREFIX_MAX_SIGNED_VALUE_MAX_TOL,SAMPLE_COUNT,TRUE_KEY_LAST_ROUND_K1,TRUE_KEY_LAST_ROUND_K2,TRUE_DELTA_SIGNED_VALUE,TRUE_DELTA_SIGNED_NUMERATOR,TRUE_DELTA_SIGNED_DENOMINATOR,TRUE_DELTA_SIGNED_FRACTION,TRUE_DELTA_ABS_VALUE,TRUE_DELTA_ABS_NUMERATOR,TRUE_DELTA_ABS_DENOMINATOR,TRUE_DELTA_ABS_FRACTION,TRUE_RANK,FALSE_DELTA_SIGNED_MEAN_VALUE,FALSE_DELTA_SIGNED_MEAN_NUMERATOR,FALSE_DELTA_SIGNED_MEAN_DENOMINATOR,FALSE_DELTA_SIGNED_MEAN_FRACTION,FALSE_DELTA_ABS_MEAN_VALUE,FALSE_DELTA_ABS_MEAN_NUMERATOR,FALSE_DELTA_ABS_MEAN_DENOMINATOR,FALSE_DELTA_ABS_MEAN_FRACTION,FALSE_DELTA_ABS_MAX_VALUE,FALSE_DELTA_ABS_MAX_NUMERATOR,FALSE_DELTA_ABS_MAX_DENOMINATOR,FALSE_DELTA_ABS_MAX_FRACTION,FALSE_DELTA_ABS_MAX_KEY_COUNT_TOL_1E_7,BEST_GUESS_K1,BEST_GUESS_K2,BEST_DELTA_SIGNED_VALUE,BEST_DELTA_SIGNED_NUMERATOR,BEST_DELTA_SIGNED_DENOMINATOR,BEST_DELTA_SIGNED_FRACTION,TRUE_FALSE_ABS_RATIO_VALUE,TRUE_FALSE_ABS_DIFF_VALUE,TRUE_FALSE_ABS_DIFF_NUMERATOR,TRUE_FALSE_ABS_DIFF_DENOMINATOR,TRUE_FALSE_ABS_DIFF_FRACTION,BEST_TIE_COUNT,TRUE_IN_BEST_TIES,MAX_ABS_DELTA_SIGNED_MIN_VALUE,MAX_ABS_DELTA_SIGNED_MAX_VALUE,MAX_ABS_DELTA_SIGNED_MIN_NUMERATOR,MAX_ABS_DELTA_SIGNED_MAX_NUMERATOR,MAX_ABS_DELTA_SIGNED_MIN_FRACTION,MAX_ABS_DELTA_SIGNED_MAX_FRACTION,MIN_ABS_DELTA_VALUE,MIN_ABS_DELTA_NUMERATOR,MIN_ABS_DELTA_DENOMINATOR,MIN_ABS_DELTA_FRACTION,LAST4_PREFIX_MAX_PAIR_COUNT,LAST4_SELECTED_PREFIX_ALPHA,LAST4_SELECTED_PREFIX_BETA,LAST4_TRUE_PRODUCT_VALUE,LAST4_TRUE_PRODUCT_NUMERATOR,LAST4_TRUE_PRODUCT_DENOMINATOR,LAST4_TRUE_DELTA1_VALUE,LAST4_TRUE_DELTA1_NUMERATOR,LAST4_TRUE_DELTA2_VALUE,LAST4_TRUE_DELTA2_NUMERATOR,LAST4_TRUE_MIDDLE_MASK,LAST4_TRUE_MIDDLE_MASK_AFTER_T,LAST4_TRUE_OUTPUT_MASK,LAST4_FALSE_PRODUCT_MAX_VALUE,LAST4_FALSE_PRODUCT_MAX_NUMERATOR,LAST4_FALSE_PRODUCT_DENOMINATOR,LAST4_FALSE_PRODUCT_MEAN_VALUE,LAST4_FALSE_PRODUCT_SUM_NUMERATOR,LAST4_FALSE_PRODUCT_MEAN_DENOMINATOR,LAST4_FALSE_MAX_KEY_PAIR,LAST4_FALSE_MAX_DELTA1_VALUE,LAST4_FALSE_MAX_DELTA1_NUMERATOR,LAST4_FALSE_MAX_DELTA2_VALUE,LAST4_FALSE_MAX_DELTA2_NUMERATOR,LAST4_FALSE_MAX_MIDDLE_MASK,LAST4_FALSE_MAX_MIDDLE_MASK_AFTER_T,LAST4_FALSE_MAX_OUTPUT_MASK,LAST4_FALSE_TRUE_PRODUCT_RATIO,LAST4_FALSE_MEAN_TRUE_PRODUCT_RATIO,LAST4_TIME_SEC,DELTA_TIME_SEC,RECOVERY_TIME_SEC,TOTAL_TIME_SEC\n"
+            "RUN_ID,SERIES_LABEL,SAMPLE_MODE,SAMPLE_FACTOR_M,SAMPLE_CAP,THREAD_COUNT,SEED,FULL_MATERIAL,KEY_MIX,ITERATION,TRUE_KEY,K4,K3,K2,K1,PREFIX_ALPHA,PREFIX_BETA,PREFIX_DELTA_ABS_VALUE,PREFIX_DELTA_ABS_NUMERATOR,PREFIX_DELTA_ABS_DENOMINATOR,PREFIX_DELTA_ABS_FRACTION,PREFIX_DELTA_SIGNED_VALUE,PREFIX_DELTA_SIGNED_NUMERATOR,PREFIX_DELTA_SIGNED_DENOMINATOR,PREFIX_DELTA_SIGNED_FRACTION,PREFIX_MAX_PAIR_COUNT_TOL_2_NEG_15,PREFIX_MAX_SIGNED_VALUE_MIN_TOL,PREFIX_MAX_SIGNED_VALUE_MAX_TOL,SAMPLE_COUNT,TRUE_KEY_LAST_ROUND_K1,TRUE_KEY_LAST_ROUND_K2,TRUE_DELTA_SIGNED_VALUE,TRUE_DELTA_SIGNED_NUMERATOR,TRUE_DELTA_SIGNED_DENOMINATOR,TRUE_DELTA_SIGNED_FRACTION,TRUE_DELTA_ABS_VALUE,TRUE_DELTA_ABS_NUMERATOR,TRUE_DELTA_ABS_DENOMINATOR,TRUE_DELTA_ABS_FRACTION,TRUE_RANK,FALSE_DELTA_SIGNED_MEAN_VALUE,FALSE_DELTA_SIGNED_MEAN_NUMERATOR,FALSE_DELTA_SIGNED_MEAN_DENOMINATOR,FALSE_DELTA_SIGNED_MEAN_FRACTION,FALSE_DELTA_ABS_MEAN_VALUE,FALSE_DELTA_ABS_MEAN_NUMERATOR,FALSE_DELTA_ABS_MEAN_DENOMINATOR,FALSE_DELTA_ABS_MEAN_FRACTION,FALSE_DELTA_ABS_MAX_VALUE,FALSE_DELTA_ABS_MAX_NUMERATOR,FALSE_DELTA_ABS_MAX_DENOMINATOR,FALSE_DELTA_ABS_MAX_FRACTION,FALSE_DELTA_ABS_MAX_KEY_COUNT_TOL_1E_7,BEST_GUESS_K1,BEST_GUESS_K2,BEST_DELTA_SIGNED_VALUE,BEST_DELTA_SIGNED_NUMERATOR,BEST_DELTA_SIGNED_DENOMINATOR,BEST_DELTA_SIGNED_FRACTION,TRUE_FALSE_ABS_RATIO_VALUE,TRUE_FALSE_ABS_DIFF_VALUE,TRUE_FALSE_ABS_DIFF_NUMERATOR,TRUE_FALSE_ABS_DIFF_DENOMINATOR,TRUE_FALSE_ABS_DIFF_FRACTION,BEST_TIE_COUNT,TRUE_IN_BEST_TIES,MAX_ABS_DELTA_SIGNED_MIN_VALUE,MAX_ABS_DELTA_SIGNED_MAX_VALUE,MAX_ABS_DELTA_SIGNED_MIN_NUMERATOR,MAX_ABS_DELTA_SIGNED_MAX_NUMERATOR,MAX_ABS_DELTA_SIGNED_MIN_FRACTION,MAX_ABS_DELTA_SIGNED_MAX_FRACTION,MIN_ABS_DELTA_VALUE,MIN_ABS_DELTA_NUMERATOR,MIN_ABS_DELTA_DENOMINATOR,MIN_ABS_DELTA_FRACTION,LAST4_PREFIX_MAX_PAIR_COUNT,LAST4_SELECTED_PREFIX_ALPHA,LAST4_SELECTED_PREFIX_BETA,LAST4_TRUE_PRODUCT_VALUE,LAST4_TRUE_PRODUCT_NUMERATOR,LAST4_TRUE_PRODUCT_DENOMINATOR,LAST4_TRUE_DELTA1_VALUE,LAST4_TRUE_DELTA1_NUMERATOR,LAST4_TRUE_DELTA2_VALUE,LAST4_TRUE_DELTA2_NUMERATOR,LAST4_TRUE_MIDDLE_MASK,LAST4_TRUE_MIDDLE_MASK_AFTER_T,LAST4_TRUE_OUTPUT_MASK,LAST4_FALSE_PRODUCT_MAX_VALUE,LAST4_FALSE_PRODUCT_MAX_NUMERATOR,LAST4_FALSE_PRODUCT_DENOMINATOR,LAST4_FALSE_PRODUCT_MEAN_VALUE,LAST4_FALSE_PRODUCT_SUM_NUMERATOR,LAST4_FALSE_PRODUCT_MEAN_DENOMINATOR,LAST4_FALSE_MAX_KEY_PAIR,LAST4_FALSE_MAX_DELTA1_VALUE,LAST4_FALSE_MAX_DELTA1_NUMERATOR,LAST4_FALSE_MAX_DELTA2_VALUE,LAST4_FALSE_MAX_DELTA2_NUMERATOR,LAST4_FALSE_MAX_MIDDLE_MASK,LAST4_FALSE_MAX_MIDDLE_MASK_AFTER_T,LAST4_FALSE_MAX_OUTPUT_MASK,LAST4_FALSE_TRUE_PRODUCT_RATIO,LAST4_FALSE_MEAN_TRUE_PRODUCT_RATIO,LAST4_TIME_SEC,DELTA_TIME_SEC,RECOVERY_TIME_SEC,TOTAL_TIME_SEC\n"
         );
         fflush(summary_csv);
     }
@@ -2324,6 +2362,7 @@ int main(int argc, char **argv) {
     fprintf(meta, "sample_cap=%" PRIu32 "\n", config.sample_cap);
     fprintf(meta, "sampling=%s\n", sample_mode_name(&config));
     fprintf(meta, "full_material=%s\n", config.full_material ? "yes" : "no");
+    fprintf(meta, "key_mix=%s\n", key_mix_name(config.key_mix));
     fprintf(meta, "series_label=%s\n", config.series_label ? config.series_label : "default");
     fprintf(meta, "top_count=%" PRIu32 "\n", config.top_count);
     fprintf(meta, "save_full_candidates=%s\n", config.save_full_candidates ? "yes" : "no");
@@ -2346,6 +2385,7 @@ int main(int argc, char **argv) {
     printf("Итераций: %" PRIu32 "\n", config.iterations);
     printf("M = %.3f, sample_cap = %" PRIu32 ", top = %" PRIu32 "\n", config.sample_factor_m, config.sample_cap, config.top_count);
     printf("Sampling: %s\n", sample_mode_name(&config));
+    printf("Key mix: %s\n", key_mix_name(config.key_mix));
     printf("Threads: %" PRIu32 "\n", config.thread_count);
     printf("Backend: requested=%s active=%s\n", backend_mode_name(config.backend_mode), backend_mode_name(active_backend));
     printf("Last4 tail metric: %s\n", config.enable_last4_metric ? "enabled" : "disabled");

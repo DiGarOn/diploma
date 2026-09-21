@@ -94,6 +94,7 @@ def main() -> int:
         "THREAD_COUNT": rows[0]["THREAD_COUNT"],
         "SEED": rows[0]["SEED"],
         "FULL_MATERIAL": rows[0]["FULL_MATERIAL"],
+        "KEY_MIX": rows[0].get("KEY_MIX", "modadd"),
         "ITERATION_COUNT": str(len(rows)),
         "TOP1_COUNT": str(sum(rank <= 1 for rank in ranks)),
         "TOP3_COUNT": str(sum(rank <= 3 for rank in ranks)),
@@ -155,6 +156,7 @@ def main() -> int:
     lines = [
         f"RUN_ID,{aggregate_row['RUN_ID']}",
         f"SERIES_LABEL,{aggregate_row['SERIES_LABEL']}",
+        f"KEY_MIX,{aggregate_row['KEY_MIX']}",
         f"ITERATION_COUNT,{aggregate_row['ITERATION_COUNT']}",
         f"TOP1_COUNT,{aggregate_row['TOP1_COUNT']}",
         f"TOP3_COUNT,{aggregate_row['TOP3_COUNT']}",

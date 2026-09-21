@@ -45,6 +45,7 @@ typedef struct {
 } DeviceBetaSummary;
 
 static bool g_tables_initialized = false;
+static KeyRecoveryKeyMix g_initialized_key_mix = KEY_RECOVERY_KEY_MIX_MODADD;
 
 static inline double now_sec_cuda(void) {
     struct timespec ts;
@@ -371,16 +372,19 @@ static bool spectrum_is_better_host(
     return candidate_alpha < current_alpha;
 }
 
-static int initialize_cuda_tables(char *error_buf, size_t error_buf_size) {
+static int initialize_cuda_tables(KeyRecoveryKeyMix key_mix, char *error_buf, size_t error_buf_size) {
     uint8_t host_round_table[256 * 256];
 
-    if (g_tables_initialized) {
+    if (g_tables_initialized && g_initialized_key_mix == key_mix) {
         return 0;
     }
 
     for (int k = 0; k < 256; k++) {
         for (int x = 0; x < 256; x++) {
-            host_round_table[(k << 8) | x] = PREP_PHASE_TABLE_HOST[(x + k) & 0xFF];
+            uint8_t mixed = key_mix == KEY_RECOVERY_KEY_MIX_XOR
+                ? (uint8_t)(x ^ k)
+                : (uint8_t)((x + k) & 0xFF);
+            host_round_table[(k << 8) | x] = PREP_PHASE_TABLE_HOST[mixed];
         }
     }
 
@@ -395,6 +399,7 @@ static int initialize_cuda_tables(char *error_buf, size_t error_buf_size) {
     }
 
     g_tables_initialized = true;
+    g_initialized_key_mix = key_mix;
     return 0;
 }
 
@@ -444,6 +449,7 @@ extern "C" void key_recovery_cuda_query(KeyRecoveryCudaInfo *info) {
 
 extern "C" int key_recovery_cuda_compute_prefix_spectrum(
     uint32_t key32,
+    KeyRecoveryKeyMix key_mix,
     PrefixSpectrum *out,
     double *elapsed_sec,
     char *error_buf,
@@ -487,7 +493,7 @@ extern "C" int key_recovery_cuda_compute_prefix_spectrum(
         set_cuda_error(error_buf, error_buf_size, "cudaSetDevice", error_code);
         return -1;
     }
-    if (initialize_cuda_tables(error_buf, error_buf_size) != 0) {
+    if (initialize_cuda_tables(key_mix, error_buf, error_buf_size) != 0) {
         return -1;
     }
 

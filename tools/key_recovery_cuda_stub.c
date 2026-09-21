@@ -13,12 +13,14 @@ void key_recovery_cuda_query(KeyRecoveryCudaInfo *info) {
 
 int key_recovery_cuda_compute_prefix_spectrum(
     uint32_t key32,
+    KeyRecoveryKeyMix key_mix,
     PrefixSpectrum *out,
     double *elapsed_sec,
     char *error_buf,
     size_t error_buf_size
 ) {
     (void)key32;
+    (void)key_mix;
     (void)out;
     if (elapsed_sec) {
         *elapsed_sec = 0.0;

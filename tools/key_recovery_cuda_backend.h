@@ -36,6 +36,11 @@ typedef enum {
     KEY_RECOVERY_BACKEND_CUDA = 2
 } KeyRecoveryBackend;
 
+typedef enum {
+    KEY_RECOVERY_KEY_MIX_MODADD = 0,
+    KEY_RECOVERY_KEY_MIX_XOR = 1
+} KeyRecoveryKeyMix;
+
 typedef struct {
     bool available;
     int device_count;
@@ -47,6 +52,7 @@ typedef struct {
 void key_recovery_cuda_query(KeyRecoveryCudaInfo *info);
 int key_recovery_cuda_compute_prefix_spectrum(
     uint32_t key32,
+    KeyRecoveryKeyMix key_mix,
     PrefixSpectrum *out,
     double *elapsed_sec,
     char *error_buf,

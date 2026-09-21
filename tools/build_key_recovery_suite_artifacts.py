@@ -71,6 +71,7 @@ def build_false_delta_distribution(summary_path: Path, series_label: str) -> dic
 def build_readable_overview_row(aggregate_row: dict[str, str]) -> dict[str, str]:
     row = {
         "SERIES": aggregate_row["SERIES_LABEL"],
+        "KEY_MIX": aggregate_row.get("KEY_MIX", "modadd"),
         "RUNS": aggregate_row["ITERATION_COUNT"],
         "TOP1": aggregate_row["TOP1_COUNT"],
         "TOP3": aggregate_row["TOP3_COUNT"],
@@ -230,6 +231,22 @@ def build_report_markdown(
     lines.append("")
     lines.append("## 1. Что запускалось")
     lines.append("")
+    key_mix_values = sorted({row.get("KEY_MIX", "modadd") for row in aggregate_rows})
+    if key_mix_values == ["xor"]:
+        lines.append(
+            "В этом прогоне ключ на каждой итерации подмешивался через XOR: "
+            "`PREP_PHASE_TABLE[x ^ k]`."
+        )
+        lines.append("")
+    elif key_mix_values == ["modadd"]:
+        lines.append(
+            "В этом прогоне использовался исходный вариант подмешивания ключа: "
+            "`PREP_PHASE_TABLE[(x + k) mod 2^8]`."
+        )
+        lines.append("")
+    else:
+        lines.append(f"В прогоне присутствуют разные режимы подмешивания ключа: {', '.join(key_mix_values)}.")
+        lines.append("")
     lines.append("Были подготовлены четыре серии вычислений:")
     lines.append("")
     lines.append("- adaptive_m1: режим material / 1 по delta^2.")
@@ -297,6 +314,7 @@ def build_report_markdown(
             continue
         lines.append(f"### {title}")
         lines.append("")
+        lines.append(f"- режим подмешивания ключа: {aggregate_row.get('KEY_MIX', 'modadd')}")
         lines.append(f"- число прогонов: {aggregate_row['ITERATION_COUNT']}")
         lines.append(f"- top1: {aggregate_row['TOP1_COUNT']} / {aggregate_row['ITERATION_COUNT']}")
         lines.append(f"- top3: {aggregate_row['TOP3_COUNT']} / {aggregate_row['ITERATION_COUNT']}")

@@ -19,6 +19,7 @@ M10=10
 FULL_M=100
 BACKEND=auto
 CUDA_THRESHOLD_COUNT=128
+KEY_MIX=modadd
 SUITE_DIR=""
 ONLY_SERIES=""
 CURRENT_PHASE="initializing"
@@ -37,6 +38,7 @@ adaptive_m1_seed=$((SEED + 4000037))
 adaptive_m5_seed=$((SEED + 5000011))
 adaptive_m10_seed=$((SEED + 6000011))
 full_material_seed=$((SEED + 7000003))
+key_mix=$KEY_MIX
 top=$TOP
 threads=$THREADS
 sample_cap=$SAMPLE_CAP
@@ -176,6 +178,18 @@ while [ $# -gt 0 ]; do
             CUDA_THRESHOLD_COUNT="$2"
             shift 2
             ;;
+        --key-mix)
+            KEY_MIX="$2"
+            case "$KEY_MIX" in
+                modadd|add|mod|xor)
+                    ;;
+                *)
+                    echo "Некорректный --key-mix: $KEY_MIX; ожидается modadd или xor"
+                    exit 1
+                    ;;
+            esac
+            shift 2
+            ;;
         --m1)
             M1="$2"
             shift 2
@@ -232,6 +246,7 @@ adaptive_m1_seed=$((SEED + 4000037))
 adaptive_m5_seed=$((SEED + 5000011))
 adaptive_m10_seed=$((SEED + 6000011))
 full_material_seed=$((SEED + 7000003))
+key_mix=$KEY_MIX
 top=$TOP
 threads=$THREADS
 sample_cap=$SAMPLE_CAP
@@ -250,6 +265,7 @@ echo "  Advisor Suite: key recovery experiments"
 echo "════════════════════════════════════════════════════════════════"
 echo "Suite dir: $SUITE_DIR"
 echo "Count: $COUNT"
+echo "Key mix: $KEY_MIX"
 echo "Threads: $THREADS"
 if [ -n "$ONLY_SERIES" ]; then
     echo "Only series: $ONLY_SERIES"
@@ -328,6 +344,7 @@ run_series() {
             --sample-cap "$SAMPLE_CAP" \
             --backend "$BACKEND" \
             --cuda-threshold-count "$CUDA_THRESHOLD_COUNT" \
+            --key-mix "$KEY_MIX" \
             "$@"
     else
         "$BUILD_DIR/key_recovery_experiment" \
@@ -340,6 +357,7 @@ run_series() {
             --sample-cap "$SAMPLE_CAP" \
             --backend "$BACKEND" \
             --cuda-threshold-count "$CUDA_THRESHOLD_COUNT" \
+            --key-mix "$KEY_MIX" \
             "$@"
     fi
 

@@ -7,13 +7,14 @@ COUNT=524288
 SEED="${SEED:-2}"
 THREADS="${THREADS:-16}"
 TOP="${TOP:-32}"
+KEY_MIX="${KEY_MIX:-modadd}"
 SUITE_DIR=""
 ONLY_SERIES=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
         -h|--help)
-            echo "Использование: bash tools/server_run_4090.sh [--count N] [--seed N] [--threads N] [--top N] [--suite-dir DIR] [--only-series NAME]"
+            echo "Использование: bash tools/server_run_4090.sh [--count N] [--seed N] [--threads N] [--top N] [--key-mix modadd|xor] [--suite-dir DIR] [--only-series NAME]"
             exit 0
             ;;
         --count)
@@ -32,6 +33,18 @@ while [ $# -gt 0 ]; do
             TOP="$2"
             shift 2
             ;;
+        --key-mix)
+            KEY_MIX="$2"
+            case "$KEY_MIX" in
+                modadd|add|mod|xor)
+                    ;;
+                *)
+                    echo "Некорректный --key-mix: $KEY_MIX; ожидается modadd или xor"
+                    exit 1
+                    ;;
+            esac
+            shift 2
+            ;;
         --resume-dir|--suite-dir)
             SUITE_DIR="$2"
             shift 2
@@ -42,7 +55,7 @@ while [ $# -gt 0 ]; do
             ;;
         *)
             echo "Неизвестный аргумент: $1"
-            echo "Использование: bash tools/server_run_4090.sh [--count N] [--seed N] [--threads N] [--top N] [--suite-dir DIR] [--only-series NAME]"
+            echo "Использование: bash tools/server_run_4090.sh [--count N] [--seed N] [--threads N] [--top N] [--key-mix modadd|xor] [--suite-dir DIR] [--only-series NAME]"
             exit 1
             ;;
     esac
@@ -54,6 +67,7 @@ CMD=(
     --seed "$SEED"
     --threads "$THREADS"
     --top "$TOP"
+    --key-mix "$KEY_MIX"
     --backend cuda
     --cuda-threshold-count 1
 )
@@ -71,6 +85,7 @@ echo "COUNT=$COUNT"
 echo "SEED=$SEED"
 echo "THREADS=$THREADS"
 echo "TOP=$TOP"
+echo "KEY_MIX=$KEY_MIX"
 if [ -n "$SUITE_DIR" ]; then
     echo "SUITE_DIR=$SUITE_DIR"
 fi
