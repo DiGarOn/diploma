@@ -10,17 +10,18 @@ mkdir -p "$BUILD_DIR"
 CPU_OBJ="$BUILD_DIR/key_recovery_experiment.o"
 CUDA_OBJ="$BUILD_DIR/key_recovery_cuda.o"
 BIN_PATH="$BUILD_DIR/key_recovery_experiment"
+CUDA_ARCH="${CUDA_ARCH:-sm_89}"
 
 gcc -O3 -Wall -Wextra -std=c11 -march=native \
     -c "$ROOT_DIR/tools/key_recovery_experiment.c" \
     -o "$CPU_OBJ"
 
 if command -v nvcc >/dev/null 2>&1; then
-    if nvcc -O3 -std=c++17 \
+    if nvcc -O3 -std=c++17 -arch="$CUDA_ARCH" \
         -c "$ROOT_DIR/tools/key_recovery_cuda.cu" \
         -o "$CUDA_OBJ"
     then
-        nvcc -O3 \
+        nvcc -O3 -arch="$CUDA_ARCH" \
             -o "$BIN_PATH" \
             "$CPU_OBJ" \
             "$CUDA_OBJ" \
