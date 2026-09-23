@@ -2106,50 +2106,68 @@ static int load_prefix_cache(
     return 0;
 }
 
-static uint32_t read_completed_iterations(const char *summary_path) {
+static int read_completed_iterations(const char *summary_path, uint32_t *completed) {
     FILE *f = fopen(summary_path, "r");
     char line[4096];
-    uint32_t max_iteration = 0;
+    int iteration_column = -1;
+    int column = 0;
+    char *field;
 
     if (!f) {
-        return 0;
+        return errno == ENOENT ? 0 : -1;
+    }
+    if (!fgets(line, sizeof(line), f) || !strchr(line, '\n')) {
+        fclose(f);
+        return -1;
+    }
+    field = line;
+    while (field) {
+        char *end = strchr(field, ',');
+        size_t length = end ? (size_t)(end - field) : strcspn(field, "\r\n");
+        if (length == 9 && strncmp(field, "ITERATION", length) == 0) {
+            iteration_column = column;
+            break;
+        }
+        field = end ? end + 1 : NULL;
+        column++;
+    }
+    if (iteration_column < 0) {
+        fclose(f);
+        return -1;
     }
 
     while (fgets(line, sizeof(line), f) != NULL) {
-        char *field = line;
-        char *comma = NULL;
-        char *end = NULL;
-        unsigned long parsed = 0;
-        int column = 0;
+        char *end;
+        unsigned long parsed;
+        int index = 0;
 
-        if (strncmp(line, "ITERATION,", 10) == 0 || strstr(line, ",ITERATION,") != NULL) {
-            continue;
+        if (!strchr(line, '\n')) {
+            fclose(f);
+            return -1;
         }
-
-        while (column < 8 && (comma = strchr(field, ',')) != NULL) {
-            field = comma + 1;
-            column++;
+        field = line;
+        while (index < iteration_column && (field = strchr(field, ',')) != NULL) {
+            field++;
+            index++;
         }
-        if (column != 8) {
-            continue;
+        if (!field || index != iteration_column) {
+            fclose(f);
+            return -1;
         }
-
-        comma = strchr(field, ',');
-        if (!comma) {
-            continue;
-        }
-
         parsed = strtoul(field, &end, 10);
-        if (end == field || end != comma || parsed > 0xFFFFFFFFul) {
-            continue;
+        if (end == field || (*end != ',' && *end != '\n') || parsed > UINT32_MAX ||
+            parsed != (unsigned long)*completed + 1) {
+            fclose(f);
+            return -1;
         }
-        if ((uint32_t)parsed > max_iteration) {
-            max_iteration = (uint32_t)parsed;
-        }
+        *completed = (uint32_t)parsed;
     }
-
+    if (ferror(f)) {
+        fclose(f);
+        return -1;
+    }
     fclose(f);
-    return max_iteration;
+    return 0;
 }
 
 int main(int argc, char **argv) {
@@ -2327,10 +2345,20 @@ int main(int argc, char **argv) {
 
     snprintf(summary_path, sizeof(summary_path), "%s/summary.csv", config.output_dir);
     if (config.resume) {
-        start_iteration = read_completed_iterations(summary_path);
-        summary_csv = fopen(summary_path, start_iteration > 0 ? "a" : "w");
+        if (read_completed_iterations(summary_path, &start_iteration) != 0) {
+            fprintf(stderr, "Некорректный summary.csv: %s; возобновление отменено\n", summary_path);
+            free(prefix_lookup);
+            free(prefix_cache_entries);
+            free(sample_plaintexts);
+            free(sample_plain_parity);
+            free(sample_cipher_hi);
+            free(sample_cipher_lo);
+            free(candidate_scores);
+            return 1;
+        }
+        summary_csv = fopen(summary_path, start_iteration > 0 ? "a" : "wx");
     } else {
-        summary_csv = fopen(summary_path, "w");
+        summary_csv = fopen(summary_path, "wx");
     }
     if (!summary_csv) {
         fprintf(stderr, "Не удалось открыть %s: %s\n", summary_path, strerror(errno));
