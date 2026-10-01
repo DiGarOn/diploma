@@ -1,4 +1,4 @@
-# Characteristics of Linear Probabilistic Key Recovery in an Educational Block Cipher
+# Characteristics of a Block-Cipher Key-Recovery Method Using Probabilistic Linear Relations
 
 ## Abstract
 
@@ -12,7 +12,7 @@ Linear cryptanalysis uses relations among selected input, output, and key bits w
 
 The present study addresses this gap in a small, fully enumerable cipher. Its 16-bit block makes it possible to compare restricted samples with all $2^{16}$ plaintexts. The 32-bit master key and 12-round Feistel structure allow a relation to be selected over the first ten rounds while hypotheses for the two final-round keys are tested by partial decryption [3]. This is an experimental model, not a security assessment of a standardized cipher. Its value lies in exposing the relationship between the amount of material, the measured imbalance under true and false hypotheses, and the rank of the true pair.
 
-The research problem is therefore twofold. First, how does the amount of material affect the chance that the true pair of final-round keys appears among the highest-ranked candidates? Second, does the empirical imbalance under the true pair separate more clearly from the mean imbalance under false pairs as material increases? The objective is to quantify both effects in completed, independent series. The analysis selects a key-dependent linear relation, evaluates all candidate pairs on each selected sample, and compares aggregate rankings and imbalance statistics across four material regimes. A supplementary XOR version of the cipher provides a further set of observations, without being treated as a controlled, paired comparison.
+The research problem therefore concerns both the effect of material size on the rank of the true final-round key pair and the extent to which its empirical imbalance separates from the mean imbalance under false pairs. The objective is to quantify both effects in completed, independent series. The analysis selects a key-dependent linear relation, evaluates all candidate pairs on each selected sample, and compares aggregate rankings and imbalance statistics across four material regimes. A supplementary XOR version of the cipher provides a further set of observations, without being treated as a controlled, paired comparison.
 
 ## Related Work
 
