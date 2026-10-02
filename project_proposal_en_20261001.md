@@ -56,10 +56,12 @@ The findings are confined to the educational cipher and the saved independent ex
 
 [2] K. Nyberg, “Linear Approximation of Block Ciphers,” in *Advances in Cryptology—EUROCRYPT '94*, LNCS 950, pp. 439–444, 1995, doi: [10.1007/BFb0053460](https://doi.org/10.1007/BFb0053460).
 
-[3] D. Garkin, “Алгоритм шифрования МиниГОСТ [MiniGOST Cipher Specification],” project technical documentation, 2026. [Online]. Available: [GitHub](https://github.com/DiGarOn/diploma/blob/main/docs/algorithm.md).
+[3] D. Garkin, “MiniGOST block cipher specification,” project technical documentation, 2026. [Online]. Available: <https://github.com/DiGarOn/diploma/blob/main/docs/algorithm_en.md>
 
-[4] D. Garkin, “Linear Key-Recovery Study: Cipher and Experimental Method,” project technical documentation, 2026. [Online]. Available: [GitHub](https://github.com/DiGarOn/diploma/blob/main/docs/key_recovery_study_method.md).
+[4] D. Garkin, “Linear key-recovery study: Cipher and experimental method,” project technical documentation, 2026. [Online]. Available: <https://github.com/DiGarOn/diploma/blob/main/docs/key_recovery_study_method.md>
 
-[5] D. Garkin, “Key-Recovery Results for the Original Cipher,” project results, Sep. 2026. [Online]. Available: [GitHub](https://github.com/DiGarOn/diploma/blob/main/docs/key_recovery_baseline_results_20260916.md).
+[5] D. Garkin, “Key-recovery results for the original cipher,” project results, Sep. 2026. [Online]. Available: <https://github.com/DiGarOn/diploma/blob/main/docs/key_recovery_baseline_results_20260916.md>
 
-[6] D. Garkin, “Key-Recovery Results for the XOR Key-Injection Variant,” project results, Sep. 2026. [Online]. Available: [GitHub](https://github.com/DiGarOn/diploma/blob/main/docs/key_recovery_xor_results_20260926.md).
+[6] D. Garkin, “Key-recovery results for the XOR key-injection variant,” project results, Sep. 2026. [Online]. Available: <https://github.com/DiGarOn/diploma/blob/main/docs/key_recovery_xor_results_20260926.md>
+
+**Word count (Introduction–Conclusion): 1,542**
